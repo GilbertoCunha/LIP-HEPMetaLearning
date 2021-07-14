@@ -11,22 +11,20 @@ class Meta(nn.Module):
     """
     Meta Learner
     """
-    def __init__(self, args, config):
+    def __init__(self, args, config, device):
         """
 
         :param args:
         """
         super(Meta, self).__init__()
-
+        self.device = device
         self.meta_lr = args.meta_lr
-        self.n_way = args.n_way
-        self.k_spt = args.k_spt
-        self.k_qry = args.k_qry
-        self.task_num = args.task_num
+        self.k_sup = args.k_sup
+        self.k_que = args.k_que
         self.update_step = args.update_step
         self.update_step_test = args.update_step_test
 
-        self.net = Learner(config, args.imgc, args.imgsz)
+        self.net = Learner(config)
 
         # Create learnable per parameter learning rate
         self.type = args.lr_type
@@ -76,7 +74,7 @@ class Meta(nn.Module):
             
         return fast_weights
 
-    def forward(self, tasks):
+    def forward(self, tasks, save=[]):
         """
 
         :param x_spt:   [b, setsz, c_, h, w]
@@ -85,35 +83,42 @@ class Meta(nn.Module):
         :param y_qry:   [b, querysz]
         :return:
         """
+        # Get torch device
+        device = self.device
 
         losses_q = [0 for _ in range(self.update_step + 1)]  # losses_q[i] is the loss on step i
         corrects = [0 for _ in range(self.update_step + 1)]
 
         # Iterate tasks
-        for i, task in tasks:
-            # Get the support and query data for this task
-            x_sup, w_sup, y_sup = next(iter(tasks[task]["sup"]))
-            x_que, w_que, y_que = next(iter(tasks[task]["query"]))
+        for task in tasks:
+            # Get support and query class Weights
+            sup_cweights = tasks[task]["sup"]["weights"]
+            que_cweights = tasks[task]["que"]["weights"]
             
-            # Normalize the weights
+            # Get the support and query data for this task and normalize weights
+            x_sup, w_sup, y_sup = next(tasks[task]["sup"]["data"])
+            x_que, w_que, y_que = next(tasks[task]["que"]["data"])
+            x_sup, w_sup, y_sup = x_sup.to(device), w_sup.to(device), y_sup.to(device)
+            x_que, w_que, y_que = x_que.to(device), w_que.to(device), y_que.to(device)
             w_sup = w_sup / w_sup.sum()
             w_que = w_que / w_que.sum()
+            save.append(w_que)
             
             # 1. run the i-th task and compute loss for k=0
             y_pred = self.net(x_sup, vars=None, bn_training=True)
-            loss = F.binary_cross_entropy(y_pred, y_sup, reduce="none")
+            loss = F.binary_cross_entropy(y_pred, y_sup, reduction="none", weight=sup_cweights)
             loss = (loss * w_sup).mean()
             
             # Loss and accuracy before first update
             with torch.no_grad():
                 # Get Loss
                 y_pred = self.net(x_que, self.net.parameters(), bn_training=True)
-                loss_q = F.binary_cross_entropy(y_pred, y_que, reduce="none")
+                loss_q = F.binary_cross_entropy(y_pred, y_que, reduction="none", weight=que_cweights)
                 loss_q = (loss_q * w_que).mean()
                 losses_q[0] += loss_q
 
                 # Get accuracy
-                pred_q = y_pred.argmax(dim=1)
+                pred_q = torch.round(y_pred)
                 correct = (torch.eq(pred_q, y_que) * w_que).sum().item()
                 corrects[0] = corrects[0] + correct
 
@@ -123,20 +128,28 @@ class Meta(nn.Module):
             
             # Predict with fast weights
             y_pred = self.net(x_que, fast_weights, bn_training=True)
-            loss_q = F.cross_entropy(y_pred, y_que)
+            loss_q = F.binary_cross_entropy(y_pred, y_que, reduction="none", weight=que_cweights)
             loss_q = (loss_q * w_que).mean()
             losses_q[1] += loss_q
             
             # Get accuracy
             with torch.no_grad():
-                pred_q = y_pred.argmax(dim=1)
+                pred_q = torch.round(y_pred)
                 correct = (torch.eq(pred_q, y_que) * w_que).sum().item()
                 corrects[1] = corrects[1] + correct
 
             for k in range(1, self.update_step):
+                # Get the support and query data for this task and normalize weights
+                x_sup, w_sup, y_sup = next(tasks[task]["sup"]["data"])
+                x_que, w_que, y_que = next(tasks[task]["que"]["data"])
+                x_sup, w_sup, y_sup = x_sup.to(device), w_sup.to(device), y_sup.to(device)
+                x_que, w_que, y_que = x_que.to(device), w_que.to(device), y_que.to(device)
+                w_sup = w_sup / w_sup.sum()
+                w_que = w_que / w_que.sum()
+                
                 # 1. run the i-th task and compute loss for k=1~K-1
                 y_hat = self.net(x_sup, fast_weights, bn_training=True)
-                loss = F.binary_cross_entropy(y_hat, y_sup)
+                loss = F.binary_cross_entropy(y_hat, y_sup, reduction="none", weight=sup_cweights)
                 loss = (loss * w_que).mean()
                 
                 # 2. compute grad on theta_pi
@@ -145,30 +158,35 @@ class Meta(nn.Module):
 
                 y_hat = self.net(x_que, fast_weights, bn_training=True)
                 # loss_q will be overwritten and just keep the loss_q on last update step.
-                loss_q = F.binary_cross_entropy(y_hat, y_que)
+                loss_q = F.binary_cross_entropy(y_hat, y_que, reduction="none", weight=que_cweights)
                 loss_q = (loss_q * w_que).mean()
                 losses_q[k + 1] += loss_q
 
                 # Get accuracy
                 with torch.no_grad():
-                    pred_q = y_hat.argmax(dim=1)
+                    pred_q = torch.round(y_hat)
                     correct = (torch.eq(pred_q, y_que) * w_que).sum().item()  # convert to numpy
                     corrects[k + 1] = corrects[k + 1] + correct
 
         # end of all tasks
         # sum over all losses on query set across all tasks
-        loss_q = losses_q[-1] / task_num
+        loss_q = losses_q[-1] / len(tasks)
 
         # optimize theta parameters
         self.meta_optim.zero_grad()
         loss_q.backward()
         self.meta_optim.step()
 
-        accs = np.array(corrects) / (querysz * task_num)
+        # Get accuracy
+        k_que = x_que.shape[0]
+        accs = np.array(corrects) / (k_que * len(tasks))
+        
+        for i in range(1, len(save)):
+            assert not torch.equal(save[0], save[i])
 
         return loss_q.item(), accs
 
-    def finetunning(self, x_spt, y_spt, x_qry, y_qry):
+    def finetunning(self, task):
         """
 
         :param x_spt:   [setsz, c_, h, w]
@@ -177,9 +195,22 @@ class Meta(nn.Module):
         :param y_qry:   [querysz]
         :return:
         """
-        assert len(x_spt.shape) == 4
+        # Get torch device
+        device = self.device
+        
+        # Get class weights for support and query data
+        sup_cweights = task["sup"]["weights"]
+        que_cweights = task["que"]["weights"]
+        
+        # Get the support and query data for this task and normalize weights
+        x_sup, w_sup, y_sup = next(task["sup"]["data"])
+        x_que, w_que, y_que = next(task["que"]["data"])
+        x_sup, w_sup, y_sup = x_sup.to(device), w_sup.to(device), y_sup.to(device)
+        x_que, w_que, y_que = x_que.to(device), w_que.to(device), y_que.to(device)
+        w_sup = w_sup / w_sup.sum()
+        w_que = w_que / w_que.sum()
 
-        querysz = x_qry.size(0)
+        quesz = x_que.size(0)
 
         corrects = [0 for _ in range(self.update_step_test + 1)]
 
@@ -188,58 +219,67 @@ class Meta(nn.Module):
         net = deepcopy(self.net)
 
         # 1. run the i-th task and compute loss for k=0
-        logits = net(x_spt)
-        loss = F.cross_entropy(logits, y_spt)
+        y_hat = net(x_sup)
+        loss = F.binary_cross_entropy(y_hat, y_sup, reduction="none", weight=sup_cweights)
+        loss = (loss * w_sup).mean(dim=-1)
 
-        # this is the loss and accuracy before first update
+        # Loss and accuracy before first update
         with torch.no_grad():
-            # [setsz, nway]
-            logits_q = net(x_qry, net.parameters(), bn_training=True)
-            # [setsz]
-            loss_q = F.cross_entropy(logits_q, y_qry)
-            if self.update_step_test == 0:
-                loss_q = (loss_q * querysz + loss * x_spt.size(0)) / (querysz + x_spt.size(0))
-            pred_q = F.softmax(logits_q, dim=1).argmax(dim=1)
-            # scalar
-            correct = torch.eq(pred_q, y_qry).sum().item()
+            y_hat_q = net(x_que, net.parameters(), bn_training=True)
+            loss_q = F.binary_cross_entropy(y_hat_q, y_que, reduction="none", weight=que_cweights)
+            loss_q = (loss_q * w_que).mean(dim=-1)
+            
+            pred_q = torch.round(y_hat_q)
+            correct = (torch.eq(pred_q, y_que) * w_que).sum().item()
             corrects[0] = corrects[0] + correct
 
-        # this is the loss and accuracy after the first update
+        # Loss and accuracy after the first update
         if self.update_step_test > 0: # APPLY META
             grad = torch.autograd.grad(loss, net.parameters(), create_graph=True, retain_graph=True)
             fast_weights = self.get_fast_weights(grad)
 
-            # [setsz, nway]
-            logits_q = net(x_qry, fast_weights, bn_training=True)
-            loss_q = F.cross_entropy(logits_q, y_qry)
-            # [setsz]
+            y_hat_q = net(x_que, fast_weights, bn_training=True)
+            loss_q = F.binary_cross_entropy(y_hat_q, y_que, reduction="none", weight=que_cweights)
+            loss_q = (loss_q * w_que).mean(dim=-1)
+            
             with torch.no_grad():
-                pred_q = F.softmax(logits_q, dim=1).argmax(dim=1)
-                # scalar
-                correct = torch.eq(pred_q, y_qry).sum().item()
+                pred_q = torch.round(y_hat_q)
+                correct = (torch.eq(pred_q, y_que) * w_que).sum().item()
                 corrects[1] = corrects[1] + correct
 
             for k in range(1, self.update_step_test):
+                # Get the support and query data for this task and normalize weights
+                x_sup, w_sup, y_sup = next(task["sup"]["data"])
+                x_que, w_que, y_que = next(task["que"]["data"])
+                x_sup, w_sup, y_sup = x_sup.to(device), w_sup.to(device), y_sup.to(device)
+                x_que, w_que, y_que = x_que.to(device), w_que.to(device), y_que.to(device)
+                w_sup = w_sup / w_sup.sum()
+                w_que = w_que / w_que.sum()
+                
                 # 1. run the i-th task and compute loss for k=1~K-1
-                logits = net(x_spt, fast_weights, bn_training=True)
-                loss = F.cross_entropy(logits, y_spt)
+                y_hat = net(x_sup, fast_weights, bn_training=True)
+                loss = F.binary_cross_entropy(y_hat, y_sup, reduction="none", weight=sup_cweights)
+                loss = (loss * w_sup).mean(dim=-1)
+                
                 # 2. compute grad on theta_pi
                 grad = torch.autograd.grad(loss, fast_weights, create_graph=True, retain_graph=True)
                 # 3. theta_pi = theta_pi - train_lr * grad
                 fast_weights = self.get_fast_weights(grad)
 
-                logits_q = net(x_qry, fast_weights, bn_training=True)
-                # loss_q will be overwritten and just keep the loss_q on last update step.
-                loss_q = F.cross_entropy(logits_q, y_qry)
+                # Get finetuned loss
+                y_hat_q = net(x_que, fast_weights, bn_training=True)
+                loss_q = F.binary_cross_entropy(y_hat_q, y_que, reduction="none", weight=que_cweights)
+                loss_q = (loss_q * w_que).mean(dim=-1)
 
+                # Get finetuned accuracy
                 with torch.no_grad():
-                    pred_q = F.softmax(logits_q, dim=1).argmax(dim=1)
-                    correct = torch.eq(pred_q, y_qry).sum().item()  # convert to numpy
+                    pred_q = torch.round(y_hat_q)
+                    correct = (torch.eq(pred_q, y_que) * w_que).sum().item()  # convert to numpy
                     corrects[k + 1] = corrects[k + 1] + correct
 
         del net
 
-        accs = np.array(corrects) / querysz
+        accs = np.array(corrects) / quesz
 
         return loss_q.item(), accs
 

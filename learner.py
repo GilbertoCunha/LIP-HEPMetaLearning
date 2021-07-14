@@ -8,7 +8,7 @@ class Learner(nn.Module):
 
     """
 
-    def __init__(self, config, imgc, imgsz):
+    def __init__(self, config):
         """
 
         :param config: network config file, type:list of (string, list)
@@ -180,7 +180,7 @@ class Learner(nn.Module):
         assert bn_idx == len(self.vars_bn)
 
 
-        return x
+        return x.squeeze(-1)
 
 
     def zero_grad(self, vars=None):

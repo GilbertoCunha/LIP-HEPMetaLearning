@@ -30,18 +30,29 @@ class MetaHEPDataset(Dataset):
         # Drop gen columns of dataframe
         drop_cols = [col for col in self.df if "gen" in col]
         self.df = self.df.drop(columns=drop_cols)
+
+    def get_class_weights(self):
+        signal_events = self.labels[self.labels == 1].shape[0]
+        bkg_events = self.labels[self.labels == 0].shape[0]
+        signal_weight = bkg_events / signal_events
+        class_weights = torch.tensor([1, signal_weight]).float()
+        return class_weights
         
     def __len__(self):
         return self.df.shape[0]
     
     def __getitem__(self, idx):
-        features = torch.tensor(self.df.loc[idx, :].values)
-        weight = torch.tensor(self.weights.loc[idx])
-        label = torch.tensor(self.labels.loc[idx])
+        features = torch.tensor(self.df.loc[idx, :].values).float()
+        weight = torch.tensor(self.weights.loc[idx]).float()
+        label = torch.tensor(self.labels.loc[idx]).float()
         return features, weight, label
 
+def cycle(iterable):
+    while True:
+        for x in iterable:
+            yield x
 
-def generate_tasks(signal_files, bkg_file, same_sample, sup_shots, query_shots):
+def generate_tasks(signal_files, bkg_file, same_sample, sup_shots, que_shots):
     """
     A function that generates a group of tasks (number of tasks equals number of signal files)
     The return of the function is a dictionary of tasks:
@@ -59,14 +70,16 @@ def generate_tasks(signal_files, bkg_file, same_sample, sup_shots, query_shots):
         filename = file.split("/")[-1].split(".")[0]
 
         # Create support and query DataLoaders for the signal file
-        supset = MetaHEPDataset(file, bkg_file, "sup", same_sample=same_sample)
-        queryset = MetaHEPDataset(file, bkg_file, "query", same_sample=same_sample)
-        suploader = DataLoader(supset, batch_size=sup_shots, shuffle=True)
-        queryloader = DataLoader(queryset, batch_size=query_shots, shuffle=True)
+        sup_set = MetaHEPDataset(file, bkg_file, "sup", same_sample=same_sample)
+        que_set = MetaHEPDataset(file, bkg_file, "query", same_sample=same_sample)
+        sup_loader = DataLoader(sup_set, batch_size=sup_shots, shuffle=True)
+        que_loader = DataLoader(que_set, batch_size=que_shots, shuffle=True)
 
         # Add the dataloaders to the dictionary
-        tasks[filename] = {}
-        tasks[filename]["sup"] = suploader
-        tasks[filename]["query"] = queryloader
+        tasks[filename] = {"sup": {}, "que": {}}
+        tasks[filename]["sup"]["data"] = iter(cycle(sup_loader))
+        tasks[filename]["sup"]["weights"] = sup_set.get_class_weights()
+        tasks[filename]["que"]["data"] = iter(cycle(que_loader))
+        tasks[filename]["que"]["weights"] = que_set.get_class_weights()
         
     return tasks

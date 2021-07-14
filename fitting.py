@@ -16,14 +16,13 @@ def mean_confidence_interval(accs, confidence=0.95):
     return m, h
 
 
-def evaluate(model, dataset, device, desc="Eval Test"):
-    db = DataLoader(dataset, 1, shuffle=True, num_workers=1, pin_memory=True)
+def evaluate(model, tasks, desc="Eval Test"):
     all_accs, losses = [], []
 
-    eval_bar = tqdm(db, desc=desc, total=len(db), leave=False)
-    for x_spt, y_spt, x_qry, y_qry in eval_bar:
-        x_spt, y_spt, x_qry, y_qry = x_spt.squeeze(0).to(device), y_spt.squeeze(0).to(device), x_qry.squeeze(0).to(device), y_qry.squeeze(0).to(device)
-        loss, accs = model.finetunning(x_spt, y_spt, x_qry, y_qry)
+    eval_bar = tqdm(tasks, desc=desc, total=len(tasks), leave=False)
+    for task in eval_bar:
+        # Finetune the model and get loss and accuracy
+        loss, accs = model.finetunning(tasks[task])
         all_accs.append(accs)
         losses.append(loss)
 
@@ -38,17 +37,17 @@ def defineModel(args):
     # Add Model definition
     config = [
         ('linear', [100, 69]),
-        ('leakyrelu', [True]),
+        ('leakyrelu', [1e-2, False]),
         ('linear', [120, 100]),
-        ('leakyrelu', [True]),
+        ('leakyrelu', [1e-2, False]),
         ('linear', [80, 120]),
-        ('leakyrelu', [True]),
+        ('leakyrelu', [1e-2, False]),
         ('linear', [50, 80]),
-        ('leakyrelu', [True]),
+        ('leakyrelu', [1e-2, False]),
         ('linear', [20, 50]),
-        ('leakyrelu', [True]),
+        ('leakyrelu', [1e-2, False]),
         ('linear', [1, 20]),
-        ('sigmoid', [True])
+        ('sigmoid', [])
     ]
     return config
 
@@ -68,11 +67,11 @@ def main():
 
     # Choose PyTorch device and create the model
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-    model = Meta(args, defineModel(args)).to(device)
+    model = Meta(args, defineModel(args), device).to(device)
 
     # Setup Weights and Biases logger, config hyperparams and watch model
-    wandb.init(project="Meta-SGD")
-    name = f"K{args.k_sup}Q{args.k_query}"
+    wandb.init(project="Meta-HEP")
+    name = f"K{args.k_sup}Q{args.k_que}"
     wandb.run.name = name
     wandb.config.update(args)
     wandb.watch(model)
@@ -87,7 +86,6 @@ def main():
         print('Total trainable tensors:', num)
 
     # Create datasets
-    print("\nGathering Datasets:")
     datapath = "processed-data/"
     bkg_file = datapath + "bkg.h5"
 
@@ -97,31 +95,31 @@ def main():
     test_signals = [datapath + p + ".h5" for p in args.test_signals]
 
     # Generate tasks
-    train_tasks = generate_tasks(train_signals, bkg_file, False, args.k_sup, args.k_query)
-    val_tasks = generate_tasks(val_signals, bkg_file, False, args.k_sup, args.k_query)
-    test_tasks = generate_tasks(test_signals, bkg_file, False, args.k_sup, args.k_query)
+    train_tasks = generate_tasks(train_signals, bkg_file, False, args.k_sup, args.k_que)
+    val_tasks = generate_tasks(val_signals, bkg_file, False, args.k_sup, args.k_que)
+    test_tasks = generate_tasks(test_signals, bkg_file, False, args.k_sup, args.k_que)
 
     # Start the training
     print("\nMeta-Training:")
     early_stop = args.early_stop
     best_tr_acc, best_val_acc, best_te_acc = 0, 0, 0
-    epoch_bar = tqdm(range(args.epochs), desc="Training", total=len(range(args.epoch//10000)))
+    epoch_bar = tqdm(range(args.epochs), desc="Training", total=len(range(args.epochs)))
+    
     for epoch in epoch_bar:
-        
-        # Create task bar
-        steps_bar = tqdm(range(args.epoch_steps), desc=f"Epoch {epoch}", total=len(db), leave=False)
+        # Create steps bar
+        steps_bar = tqdm(range(args.epoch_steps), desc=f"Epoch {epoch}", total=args.epoch_steps, leave=False)
         for step in steps_bar:
             total_steps = args.epoch_steps * epoch + step + 1
 
             # Perform training for each task
-            model(train_tasks)                                
+            model(train_tasks)                             
 
             # Perform evaluation and log metrics
             if total_steps % args.save_summary_steps == 0:  
                 # Get evaluation metrics
-                tr_acc, tr_loss = evaluate(model, train_tasks, device, "Eval Train")
-                val_acc, val_loss = evaluate(model, val_tasks, device, "Eval Val")
-                te_acc, te_loss = evaluate(model, test_tasks, device)
+                tr_acc, tr_loss = evaluate(model, train_tasks, "Eval Train")
+                val_acc, val_loss = evaluate(model, val_tasks, "Eval Val")
+                te_acc, te_loss = evaluate(model, test_tasks)
 
                 # Update Task tqdm bar
                 metrics = {
@@ -139,7 +137,7 @@ def main():
                 # Update best metrics
                 if val_acc > best_val_acc:
                     best_val_acc = val_acc
-                    early_stop = args.pruning
+                    early_stop = args.early_stop
                 else:
                     early_stop -= 1
                 best_te_acc = max(te_acc, best_te_acc)
@@ -165,11 +163,11 @@ if __name__ == '__main__':
     argparser = argparse.ArgumentParser()
     argparser.add_argument('--epochs', type=int, help='number of epochs', default=1000)
     argparser.add_argument('--epoch_steps', type=int, help='number of steps per epoch', default=1000)
-    argparser.add_argument('--train_signals', type=[str], help='signal files to be used in training', default=["hg3000_hq1000", "hg3000_hq1400", "wohg_hq1200"])
-    argparser.add_argument('--val_signals', type=[str], help='signal files to be used in validation', default=["hg3000_hq1200", "wohg_hq1000"])
-    argparser.add_argument('--test_signals', type=[str], help='signal files to be used in testing', default=["wohg_hq1400", "fcnc"])
-    argparser.add_argument('--k_sup', type=int, help='k shot for support set', default=1)
-    argparser.add_argument('--k_query', type=int, help='k shot for query set', default=15)
+    argparser.add_argument('--train_signals', nargs="+", type=str, help='signal files to be used in training', default=["hg3000_hq1000", "hg3000_hq1400", "wohg_hq1200"])
+    argparser.add_argument('--val_signals', nargs="+", type=str, help='signal files to be used in validation', default=["hg3000_hq1200", "wohg_hq1000"])
+    argparser.add_argument('--test_signals', nargs="+", type=str, help='signal files to be used in testing', default=["wohg_hq1400", "fcnc"])
+    argparser.add_argument('--k_sup', type=int, help='k shot for support set', default=20)
+    argparser.add_argument('--k_que', type=int, help='k shot for que set', default=15)
     argparser.add_argument('--lr_type', type=str, help='scalar, vector or matrix (for learning rate)', default="vector")
     argparser.add_argument('--meta_lr', type=float, help='meta-level outer learning rate', default=1e-3)
     argparser.add_argument('--update_lr', type=float, help='task-level inner update learning rate', default=0.01)

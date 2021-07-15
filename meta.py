@@ -95,8 +95,8 @@ class Meta(nn.Module):
             x_que, w_que, y_que = next(tasks[task]["que"]["data"])
             x_sup, w_sup, y_sup = x_sup.to(device), w_sup.to(device), y_sup.to(device)
             x_que, w_que, y_que = x_que.to(device), w_que.to(device), y_que.to(device)
-            w_sup = w_sup / w_sup.sum()
-            w_que = w_que / w_que.sum()
+            w_sup = w_sup / w_sup.sum() * w_sup.shape[0]
+            w_que = w_que / w_que.sum() * w_que.shape[0]
             
             # 1. run the i-th task and compute loss for k=0
             y_pred = self.net(x_sup, vars=None, bn_training=True)

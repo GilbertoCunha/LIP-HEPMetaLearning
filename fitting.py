@@ -101,16 +101,15 @@ def main():
     #test_signals = [datapath + p + ".h5" for p in args.test_signals]
 
     # Generate tasks
+    tqdm.write("\nMeta-Training:")
     train_tasks = generate_tasks(train_signals, bkg_file, args.k_sup, args.k_que)
     val_tasks = generate_tasks(val_signals, bkg_file, args.k_sup, args.k_que)
     #test_tasks = generate_tasks(test_signals, bkg_file, args.k_sup, args.k_que)
 
     # Start the training
-    print("\nMeta-Training:")
     best_val_acc = 0
     early_stop = args.early_stop
     epoch_bar = tqdm(range(args.epochs), desc="Training", total=len(range(args.epochs)))
-    
     for epoch in epoch_bar:
         # Create steps bar
         steps_bar = tqdm(range(args.epoch_steps), desc=f"Epoch {epoch}", total=args.epoch_steps, leave=False)

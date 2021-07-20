@@ -115,9 +115,7 @@ class Meta(nn.Module):
 
                 # Accuracy
                 pred_q = torch.round(y_pred)
-                weights = weights / weights.sum()
-                w_que = w_que / w_que.sum()
-                correct = (torch.eq(pred_q, y_que) * w_que * weights).sum().item()
+                correct = (torch.eq(pred_q, y_que) * w_que).sum().item()
                 corrects[0] = corrects[0] + correct
 
             # TODO: GRADIENT VALUES VERY SMALL
@@ -135,9 +133,7 @@ class Meta(nn.Module):
             # Get query accuracy
             with torch.no_grad():
                 pred_q = torch.round(y_pred)
-                weights = weights / weights.sum()
-                w_que = w_que / w_que.sum()
-                correct = (torch.eq(pred_q, y_que) * w_que * weights).sum().item()
+                correct = (torch.eq(pred_q, y_que) * w_que).sum().item()
                 corrects[1] = corrects[1] + correct
 
         # Get the mean of the losses across tasks
@@ -192,9 +188,7 @@ class Meta(nn.Module):
             loss_q = (loss_q * w_que * weights).mean(dim=-1)
             
             pred_q = torch.round(y_hat_q)
-            weights = weights / weights.sum()
-            w_que = w_que / w_que.sum()
-            correct = (torch.eq(pred_q, y_que) * w_que * weights).sum().item()
+            correct = (torch.eq(pred_q, y_que) * w_que).sum().item()
             corrects[0] = corrects[0] + correct
 
         # Inner optimizer to get fast weights
@@ -210,9 +204,7 @@ class Meta(nn.Module):
         # Calculate query accuracy on fast weights
         with torch.no_grad():
             pred_q = torch.round(y_hat_q)
-            weights = weights / weights.sum()
-            w_que = w_que / w_que.sum()
-            correct = (torch.eq(pred_q, y_que) * w_que * weights).sum().item()
+            correct = (torch.eq(pred_q, y_que) * w_que).sum().item()
             corrects[1] = corrects[1] + correct
 
         del net

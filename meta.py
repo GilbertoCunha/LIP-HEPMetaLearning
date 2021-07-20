@@ -81,8 +81,8 @@ class Meta(nn.Module):
         device = self.device
 
         # List of losses and correct guesses for each fast weight update step
-        losses_q = [0 for _ in range(self.update_step + 1)]
-        corrects = [0 for _ in range(self.update_step + 1)]
+        losses_q = [0, 0]
+        corrects = [0, 0]
 
         # Iterate tasks
         for task in tasks:
@@ -100,7 +100,7 @@ class Meta(nn.Module):
             
             # 1. run the i-th task and compute loss for k=0
             y_pred = self.net(x_sup, vars=None, bn_training=True)
-            weights = get_class_weights(sup_cweights, y_sup)
+            weights = get_class_weights(sup_cweights, y_sup).to(device)
             loss = F.binary_cross_entropy(y_pred, y_sup, reduction="none")
             loss = (loss * w_sup * weights).mean()
             
@@ -108,13 +108,15 @@ class Meta(nn.Module):
             with torch.no_grad():
                 # Loss
                 y_pred = self.net(x_que, self.net.parameters(), bn_training=True)
-                weights = get_class_weights(que_cweights, y_que)
+                weights = get_class_weights(que_cweights, y_que).to(device)
                 loss_q = F.binary_cross_entropy(y_pred, y_que, reduction="none")
                 loss_q = (loss_q * w_que * weights).mean()
                 losses_q[0] += loss_q
 
                 # Accuracy
                 pred_q = torch.round(y_pred)
+                weights = weights / weights.sum()
+                w_que = w_que / w_que.sum()
                 correct = (torch.eq(pred_q, y_que) * w_que * weights).sum().item()
                 corrects[0] = corrects[0] + correct
 
@@ -125,7 +127,7 @@ class Meta(nn.Module):
             
             # Predict with fast weights and get query loss
             y_pred = self.net(x_que, fast_weights, bn_training=True)
-            weights = get_class_weights(que_cweights, y_que)
+            weights = get_class_weights(que_cweights, y_que).to(device)
             loss_q = F.binary_cross_entropy(y_pred, y_que, reduction="none")
             loss_q = (loss_q * w_que * weights).mean()
             losses_q[1] += loss_q
@@ -133,6 +135,8 @@ class Meta(nn.Module):
             # Get query accuracy
             with torch.no_grad():
                 pred_q = torch.round(y_pred)
+                weights = weights / weights.sum()
+                w_que = w_que / w_que.sum()
                 correct = (torch.eq(pred_q, y_que) * w_que * weights).sum().item()
                 corrects[1] = corrects[1] + correct
 
@@ -163,12 +167,12 @@ class Meta(nn.Module):
         x_que, w_que, y_que = next(task["que"]["data"])
         x_sup, w_sup, y_sup = x_sup.to(device), w_sup.to(device), y_sup.to(device)
         x_que, w_que, y_que = x_que.to(device), w_que.to(device), y_que.to(device)
-        w_sup = w_sup / w_sup.sum()
-        w_que = w_que / w_que.sum()
+        w_sup = w_sup / w_sup.sum() * w_sup.shape[0]
+        w_que = w_que / w_que.sum() * w_que.shape[0]
 
         query_size = x_que.size(0)
 
-        corrects = [0 for _ in range(self.update_step_test + 1)]
+        corrects = [0, 0]
 
         # In order to not ruin the state of running_mean/variance and bn_weight/bias
         # We finetune on a copied model instead of the model itself
@@ -176,18 +180,20 @@ class Meta(nn.Module):
 
         # Get support loss for the task
         y_hat = net(x_sup)
-        weights = get_class_weights(sup_cweights, y_sup)
+        weights = get_class_weights(sup_cweights, y_sup).to(device)
         loss = F.binary_cross_entropy(y_hat, y_sup, reduction="none")
         loss = (loss * w_sup * weights).mean(dim=-1)
 
         # Loss and accuracy before first update
         with torch.no_grad():
             y_hat_q = net(x_que, net.parameters(), bn_training=True)
-            weights = get_class_weights(que_cweights, y_que)
+            weights = get_class_weights(que_cweights, y_que).to(device)
             loss_q = F.binary_cross_entropy(y_hat_q, y_que, reduction="none")
             loss_q = (loss_q * w_que * weights).mean(dim=-1)
             
             pred_q = torch.round(y_hat_q)
+            weights = weights / weights.sum()
+            w_que = w_que / w_que.sum()
             correct = (torch.eq(pred_q, y_que) * w_que * weights).sum().item()
             corrects[0] = corrects[0] + correct
 
@@ -197,13 +203,15 @@ class Meta(nn.Module):
 
         # Calculate query loss on fast weights
         y_hat_q = net(x_que, fast_weights, bn_training=True)
-        weights = get_class_weights(que_cweights, y_que)
+        weights = get_class_weights(que_cweights, y_que).to(device)
         loss_q = F.binary_cross_entropy(y_hat_q, y_que, reduction="none")
         loss_q = (loss_q * w_que * weights).mean(dim=-1)
         
         # Calculate query accuracy on fast weights
         with torch.no_grad():
             pred_q = torch.round(y_hat_q)
+            weights = weights / weights.sum()
+            w_que = w_que / w_que.sum()
             correct = (torch.eq(pred_q, y_que) * w_que * weights).sum().item()
             corrects[1] = corrects[1] + correct
 

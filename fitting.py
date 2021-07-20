@@ -36,16 +36,22 @@ def evaluate(model, tasks, desc="Eval Test"):
 def defineModel(args):
     # Add Model definition
     config = [
+        ('bn', [69]),
         ('linear', [100, 69]),
         ('leakyrelu', [1e-2, False]),
+        ('bn', [100]),
         ('linear', [120, 100]),
         ('leakyrelu', [1e-2, False]),
+        ('bn', [120]),
         ('linear', [80, 120]),
         ('leakyrelu', [1e-2, False]),
+        ('bn', [80]),
         ('linear', [50, 80]),
         ('leakyrelu', [1e-2, False]),
+        ('bn', [50]),
         ('linear', [20, 50]),
         ('leakyrelu', [1e-2, False]),
+        ('bn', [20]),
         ('linear', [1, 20]),
         ('sigmoid', [])
     ]
@@ -92,17 +98,17 @@ def main():
     # Add datapath and extention to files for each split
     train_signals = [datapath + p + ".h5" for p in args.train_signals]
     val_signals = [datapath + p + ".h5" for p in args.val_signals]
-    test_signals = [datapath + p + ".h5" for p in args.test_signals]
+    #test_signals = [datapath + p + ".h5" for p in args.test_signals]
 
     # Generate tasks
-    train_tasks = generate_tasks(train_signals, bkg_file, False, args.k_sup, args.k_que)
-    val_tasks = generate_tasks(val_signals, bkg_file, False, args.k_sup, args.k_que)
-    test_tasks = generate_tasks(test_signals, bkg_file, False, args.k_sup, args.k_que)
+    train_tasks = generate_tasks(train_signals, bkg_file, args.k_sup, args.k_que)
+    val_tasks = generate_tasks(val_signals, bkg_file, args.k_sup, args.k_que)
+    #test_tasks = generate_tasks(test_signals, bkg_file, args.k_sup, args.k_que)
 
     # Start the training
     print("\nMeta-Training:")
+    best_val_acc = 0
     early_stop = args.early_stop
-    best_tr_acc, best_val_acc, best_te_acc = 0, 0, 0
     epoch_bar = tqdm(range(args.epochs), desc="Training", total=len(range(args.epochs)))
     
     for epoch in epoch_bar:
@@ -114,44 +120,30 @@ def main():
             # Perform training for each task
             model(train_tasks)                             
 
-            # Perform evaluation and log metrics
-            if total_steps % args.save_summary_steps == 0:  
-                # Get evaluation metrics
-                tr_acc, tr_loss = evaluate(model, train_tasks, "Eval Train")
-                val_acc, val_loss = evaluate(model, val_tasks, "Eval Val")
-                te_acc, te_loss = evaluate(model, test_tasks)
+        # Get evaluation metrics
+        tr_acc, tr_loss = evaluate(model, train_tasks, "Eval Train")
+        val_acc, val_loss = evaluate(model, val_tasks, "Eval Val")
 
-                # Update Task tqdm bar
-                metrics = {
-                    'tr acc': tr_acc,
-                    'val_acc': val_acc,
-                    'te_acc': te_acc
-                }
-                steps_bar.set_postfix(metrics)
-                metrics['tr_loss'] = tr_loss
-                metrics['val_loss'] = val_loss
-                metrics['te_loss'] = te_loss
-                wandb.log(metrics)
-                f.write(f"{total_steps},{tr_loss},{tr_acc},{val_loss},{val_acc},{te_loss},{te_acc}\n")
+        # Update Task tqdm bar
+        metrics = {
+            'tr acc': tr_acc,
+            'val_acc': val_acc,
+        }
+        metrics['tr_loss'] = tr_loss
+        metrics['val_loss'] = val_loss
+        metrics['prune'] = early_stop
+        wandb.log(metrics)
+        f.write(f"{total_steps},{tr_loss},{tr_acc},{val_loss},{val_acc}\n")
 
-                # Update best metrics
-                if val_acc > best_val_acc:
-                    best_val_acc = val_acc
-                    early_stop = args.early_stop
-                else:
-                    early_stop -= 1
-                best_te_acc = max(te_acc, best_te_acc)
-                best_tr_acc = max(tr_acc, best_tr_acc)
+        # Update best metrics
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            early_stop = args.early_stop
+        else:
+            early_stop -= 1
 
-                if early_stop == 0: break
-
-                # Update tqdm 
-                epoch_bar.set_postfix({
-                    'b_tr_acc': best_tr_acc,
-                    'b_val_acc': best_val_acc,
-                    'b_te_acc': best_te_acc,
-                    'prune': early_stop
-                })
+        # Update tqdm 
+        epoch_bar.set_postfix(metrics)
 
         if early_stop == 0: break
 
@@ -166,7 +158,7 @@ if __name__ == '__main__':
     argparser.add_argument('--train_signals', nargs="+", type=str, help='signal files to be used in training', default=["hg3000_hq1000", "hg3000_hq1400", "wohg_hq1200"])
     argparser.add_argument('--val_signals', nargs="+", type=str, help='signal files to be used in validation', default=["hg3000_hq1200", "wohg_hq1000"])
     argparser.add_argument('--test_signals', nargs="+", type=str, help='signal files to be used in testing', default=["wohg_hq1400", "fcnc"])
-    argparser.add_argument('--k_sup', type=int, help='k shot for support set', default=20)
+    argparser.add_argument('--k_sup', type=int, help='k shot for support set', default=100)
     argparser.add_argument('--k_que', type=int, help='k shot for que set', default=15)
     argparser.add_argument('--lr_type', type=str, help='scalar, vector or matrix (for learning rate)', default="vector")
     argparser.add_argument('--meta_lr', type=float, help='meta-level outer learning rate', default=1e-3)

@@ -8,14 +8,14 @@ class MetaHEPDataset(Dataset):
     A Dataset class for the processed .h5 files.
     Each entry of the dataset contains a tuple of (features, weight, label).
     """
-    def __init__(self, signal_path, bkg_path, meta_split, same_sample=False):
+    def __init__(self, signal_path, bkg_path, meta_split):
         # NOTE: BKG HAS NO SAMPLE MATCHING FCNC
         
         # Load and store the data
+        signal = signal_path.split("/")[-1].split(".")[0]
         signal_df = pd.read_hdf(signal_path)
         bkg_df = pd.read_hdf(bkg_path)
-        if same_sample:
-            bkg_df = bkg_df[bkg_df["gen_sample"] == signal_df["gen_sample"][0]]
+        bkg_df = bkg_df[bkg_df["gen_task"] == signal]
         df = pd.concat([signal_df, bkg_df], ignore_index=True)
         mask = df["gen_meta_split"] == meta_split
         self.df = df[mask].reset_index(drop=True)
@@ -28,9 +28,9 @@ class MetaHEPDataset(Dataset):
         self.labels = self.df["gen_label"]
         
         # Drop gen columns of dataframe
-        drop_cols = [col for col in self.df if "gen" in col]
+        drop_cols = [col for col in self.df if "gen" in col] + ["level_0", "index"]
         self.df = self.df.drop(columns=drop_cols)
-
+        
     def get_class_weights(self):
         signal_events = self.labels[self.labels == 1].shape[0]
         bkg_events = self.labels[self.labels == 0].shape[0]
@@ -52,7 +52,7 @@ def cycle(iterable):
         for x in iterable:
             yield x
 
-def generate_tasks(signal_files, bkg_file, same_sample, sup_shots, que_shots):
+def generate_tasks(signal_files, bkg_file, sup_shots, que_shots):
     """
     A function that generates a group of tasks (number of tasks equals number of signal files)
     The return of the function is a dictionary of tasks:
@@ -70,8 +70,8 @@ def generate_tasks(signal_files, bkg_file, same_sample, sup_shots, que_shots):
         filename = file.split("/")[-1].split(".")[0]
 
         # Create support and query DataLoaders for the signal file
-        sup_set = MetaHEPDataset(file, bkg_file, "sup", same_sample=same_sample)
-        que_set = MetaHEPDataset(file, bkg_file, "query", same_sample=same_sample)
+        sup_set = MetaHEPDataset(file, bkg_file, "sup")
+        que_set = MetaHEPDataset(file, bkg_file, "query")
         sup_loader = DataLoader(sup_set, batch_size=sup_shots, shuffle=True)
         que_loader = DataLoader(que_set, batch_size=que_shots, shuffle=True)
 

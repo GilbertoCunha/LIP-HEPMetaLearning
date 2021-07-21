@@ -21,22 +21,22 @@ class Meta(nn.Module):
         """
         super(Meta, self).__init__()
         self.device = device
-        self.meta_lr = args.meta_lr
-        self.k_sup = args.k_sup
-        self.k_que = args.k_que
+        self.meta_lr = args["meta_lr"]
+        self.k_sup = args["k_sup"]
+        self.k_que = args["k_que"]
 
         self.net = Learner(config)
 
         # Create learnable per parameter learning rate
-        self.type = args.lr_type
+        self.type = args["lr_type"]
         if self.type == "vector":
             self.update_lr = nn.ParameterList()
             for p in self.net.parameters():
-                p_lr = args.update_lr * torch.ones_like(p)
+                p_lr = args["update_lr"] * torch.ones_like(p)
                 self.update_lr.append(nn.Parameter(p_lr))
             params = list(self.net.parameters()) + list(self.update_lr)
         elif self.type == "scalar":
-            self.update_lr = nn.Parameter(torch.tensor(args.update_lr))
+            self.update_lr = nn.Parameter(torch.tensor(args["update_lr"]))
             params = list(self.net.parameters())
             params += [self.update_lr]
 
@@ -118,7 +118,6 @@ class Meta(nn.Module):
                 correct = (torch.eq(pred_q, y_que) * w_que).sum().item()
                 corrects[0] = corrects[0] + correct
 
-            # TODO: GRADIENT VALUES VERY SMALL
             # Get fast weights with inner optimizer
             grad = torch.autograd.grad(loss, self.net.parameters())
             fast_weights = self.get_fast_weights(grad)
@@ -148,11 +147,12 @@ class Meta(nn.Module):
         k_que = x_que.shape[0]
         accs = np.array(corrects) / (k_que * len(tasks))
 
-        return loss_q.item(), accs
+        return loss_q.item(), accs[-1]
 
     def finetunning(self, task):
-        # Get torch device
+        # Get torch device and initialize accuracy placeholder
         device = self.device
+        corrects = [0, 0]
         
         # Get class weights for support and query data
         sup_cweights = task["sup"]["weights"]
@@ -165,10 +165,6 @@ class Meta(nn.Module):
         x_que, w_que, y_que = x_que.to(device), w_que.to(device), y_que.to(device)
         w_sup = w_sup / w_sup.sum() * w_sup.shape[0]
         w_que = w_que / w_que.sum() * w_que.shape[0]
-
-        query_size = x_que.size(0)
-
-        corrects = [0, 0]
 
         # In order to not ruin the state of running_mean/variance and bn_weight/bias
         # We finetune on a copied model instead of the model itself
@@ -209,9 +205,11 @@ class Meta(nn.Module):
 
         del net
 
+        # Calculate accuracies
+        query_size = x_que.shape[0]
         accs = np.array(corrects) / query_size
 
-        return loss_q.item(), accs
+        return loss_q.item(), accs[-1]
 
 
 def main():

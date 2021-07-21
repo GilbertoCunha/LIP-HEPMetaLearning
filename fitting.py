@@ -16,112 +16,125 @@ def mean_confidence_interval(accs, confidence=0.95):
     return m, h
 
 
-def evaluate(model, tasks, desc="Eval Test"):
-    all_accs, losses = [], []
+def evaluate(model, tasks, eval_steps, desc="Eval Test"):
+    accs, losses = [], []
 
     eval_bar = tqdm(tasks, desc=desc, total=len(tasks), leave=False)
     for task in eval_bar:
+        # Create task bar and metric placeholders
+        steps_bar = tqdm(range(eval_steps), desc=f"Evaluating task {task}", total=eval_steps, leave=False)
+        task_accs, task_losses = [], []
+        
         # Finetune the model and get loss and accuracy
-        loss, accs = model.finetunning(tasks[task])
-        all_accs.append(accs)
+        for _ in steps_bar:
+            loss, acc = model.finetunning(tasks[task])
+            task_accs.append(acc)
+            task_losses.append(loss)
+            
+        # Calculate average loss and accuracies
+        loss = sum(task_losses) / len(task_losses)
+        acc = sum(task_accs) / len(task_accs)
+        accs.append(acc)
         losses.append(loss)
 
-    accs = list(map(lambda a: a[-1], all_accs))
-    acc = np.array(accs).mean(axis=0).astype(np.float16)
-    loss = np.array(losses).mean(axis=0).astype(np.float16)
+    # Calculate average metrics across tasks
+    acc = np.array(accs).astype(np.float32).mean(axis=0)
+    loss = np.array(losses).astype(np.float32).mean(axis=0)
 
     return acc, loss
 
+def get_layer(in_features, out_features):
+    return [
+        ('bn', [in_features]),
+        ('linear', [out_features, in_features]),
+        ('leakyrelu', [1e-2, False])
+    ]
 
-def defineModel(args):
-    # Add Model definition
-    config = [
-        ('bn', [69]),
-        ('linear', [100, 69]),
-        ('leakyrelu', [1e-2, False]),
-        ('bn', [100]),
-        ('linear', [120, 100]),
-        ('leakyrelu', [1e-2, False]),
-        ('bn', [120]),
-        ('linear', [80, 120]),
-        ('leakyrelu', [1e-2, False]),
-        ('bn', [80]),
-        ('linear', [50, 80]),
-        ('leakyrelu', [1e-2, False]),
-        ('bn', [50]),
-        ('linear', [20, 50]),
-        ('leakyrelu', [1e-2, False]),
-        ('bn', [20]),
-        ('linear', [1, 20]),
+def get_model(hidden_layers):
+    # Initialize model
+    config = []
+    in_features = 69
+    
+    # Populate model according to hidden layers
+    for out_features in hidden_layers:
+        config += get_layer(in_features, out_features)
+        in_features = out_features
+        
+    # Add final layer to the model
+    config += [
+        ('bn', [in_features]),
+        ('linear', [1, in_features]),
         ('sigmoid', [])
     ]
     return config
 
 
-def main():
+def objective(trial, train_tasks, val_tasks, args):
     # Manually seed torch and numpy for reproducible results
-    torch.manual_seed(args.seed)
-    torch.cuda.manual_seed_all(args.seed)
-    np.random.seed(args.seed)
-
-    # Open csv file to write for metric logging
-    try:
-        f = open("results.csv", "w")
-    except FileNotFoundError:
-        f = open("results.csv", "x")
-    f.write("Steps,tr_loss,tr_acc,val_loss,val_acc,te_loss,te_acc\n")
+    torch.manual_seed(args["seed"])
+    torch.cuda.manual_seed_all(args["seed"])
+    np.random.seed(args["seed"])
+    
+    # Defining trial parameters
+    num_layers = trial.suggest_int("num_hidden_layers", 1, 4)
+    hidden_layers = []
+    for i in range(num_layers):
+        num_features = trial.suggest_int(f"num_features_layer_{i}", 20, 150)
+        hidden_layers.append(num_features)
 
     # Choose PyTorch device and create the model
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-    model = Meta(args, defineModel(args), device).to(device)
-
+    model = Meta(args, get_model(hidden_layers), device).to(device)
+    
     # Setup Weights and Biases logger, config hyperparams and watch model
     wandb.init(project="Meta-HEP")
-    name = f"K{args.k_sup}Q{args.k_que}"
+    k_sup, k_que = args["k_sup"], args["k_que"]
+    name = f"K{k_sup}Q{k_que}"
     wandb.run.name = name
     wandb.config.update(args)
     wandb.watch(model)
     print(f"RUN NAME: {name}")
 
-    # Print additional information on the model
-    if args.verbose:
-        tmp = filter(lambda x: x.requires_grad, model.parameters())
-        num = sum(map(lambda x: np.prod(x.shape), tmp))
-        print(args)
-        print(model)
-        print('Total trainable tensors:', num)
+    # Fit the model and return best loss
+    return fit(model, train_tasks, val_tasks, args)
 
-    # Create datasets
-    datapath = "processed-data/"
-    bkg_file = datapath + "bkg.h5"
 
-    # Add datapath and extention to files for each split
-    train_signals = [datapath + p + ".h5" for p in args.train_signals]
-    val_signals = [datapath + p + ".h5" for p in args.val_signals]
-    #test_signals = [datapath + p + ".h5" for p in args.test_signals]
+def fit(model, train_tasks, val_tasks, args):
+    """
+    Fits the input model to the training tasks and evaluates it in the validation tasks.
+    This fit is done using Few-Shot Meta-learning using the Meta-SGD algorithm. 
 
-    # Generate tasks
-    tqdm.write("\nMeta-Training:")
-    train_tasks = generate_tasks(train_signals, bkg_file, args.k_sup, args.k_que)
-    val_tasks = generate_tasks(val_signals, bkg_file, args.k_sup, args.k_que)
-    #test_tasks = generate_tasks(test_signals, bkg_file, args.k_sup, args.k_que)
+    Args:
+        model: The model to train
+        train_tasks (dict): A dictionary of tasks to train on
+        val_tasks (dict): A dictionary of tasks to validate on
+        args (dict): A dictionary of arguments that dictates the training process
+
+    Returns:
+        float: The best validation loss achieved during the training process
+    """
 
     # Start the training
-    best_val_acc = 0
-    early_stop = args.early_stop
-    epoch_bar = tqdm(range(args.epochs), desc="Training", total=len(range(args.epochs)))
+    best_val_loss = float("inf")
+    patience = args["patience"]
+    epoch_bar = tqdm(range(args["epochs"]), desc="Training", total=args["epochs"])
     for epoch in epoch_bar:
         # Create steps bar
-        steps_bar = tqdm(range(args.epoch_steps), desc=f"Epoch {epoch}", total=args.epoch_steps, leave=False)
-        for step in steps_bar:
-            total_steps = args.epoch_steps * epoch + step + 1
+        steps_bar = tqdm(range(args["epoch_steps"]), desc=f"Epoch {epoch}", total=args["epoch_steps"], leave=False)
+        
+        # Perform training for each task
+        tr_accs, tr_losses = [], []
+        for _ in steps_bar: 
+            tr_loss, tr_acc = model(train_tasks)
+            tr_accs.append(tr_acc)
+            tr_losses.append(tr_loss)
+            
+        # Get training mean metrics
+        tr_acc = np.array(tr_accs).astype(np.float32).mean(axis=0)
+        tr_loss = np.array(tr_losses).astype(np.float32).mean(axis=0)
 
-            # Perform training for each task
-            model(train_tasks)                             
-
-        # Get evaluation metrics
-        tr_acc, tr_loss = evaluate(model, train_tasks, "Eval Train")
-        val_acc, val_loss = evaluate(model, val_tasks, "Eval Val")
+        # Get validation metrics
+        val_acc, val_loss = evaluate(model, val_tasks, args["eval_steps"], "Eval Val")
 
         # Update Task tqdm bar
         metrics = {
@@ -130,41 +143,19 @@ def main():
         }
         metrics['tr_loss'] = tr_loss
         metrics['val_loss'] = val_loss
-        metrics['prune'] = early_stop
+        metrics['patience'] = patience
         wandb.log(metrics)
-        f.write(f"{total_steps},{tr_loss},{tr_acc},{val_loss},{val_acc}\n")
 
         # Update best metrics
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
-            early_stop = args.early_stop
+        if val_loss < best_val_loss:
+            best_val_loss = val_acc
+            patience = args["patience"]
         else:
-            early_stop -= 1
+            patience -= 1
 
         # Update tqdm 
         epoch_bar.set_postfix(metrics)
 
-        if early_stop == 0: break
-
-    f.close()
-
-
-if __name__ == '__main__':
-    # Argparse arguments
-    argparser = argparse.ArgumentParser()
-    argparser.add_argument('--epochs', type=int, help='number of epochs', default=1000)
-    argparser.add_argument('--epoch_steps', type=int, help='number of steps per epoch', default=1000)
-    argparser.add_argument('--train_signals', nargs="+", type=str, help='signal files to be used in training', default=["hg3000_hq1000", "hg3000_hq1400", "wohg_hq1200"])
-    argparser.add_argument('--val_signals', nargs="+", type=str, help='signal files to be used in validation', default=["hg3000_hq1200", "wohg_hq1000"])
-    argparser.add_argument('--test_signals', nargs="+", type=str, help='signal files to be used in testing', default=["wohg_hq1400", "fcnc"])
-    argparser.add_argument('--k_sup', type=int, help='k shot for support set', default=100)
-    argparser.add_argument('--k_que', type=int, help='k shot for que set', default=200)
-    argparser.add_argument('--lr_type', type=str, help='scalar, vector or matrix (for inner learning rate)', default="vector")
-    argparser.add_argument('--meta_lr', type=float, help='meta-level outer learning rate', default=1e-3)
-    argparser.add_argument('--update_lr', type=float, help='task-level inner update learning rate', default=0.01)
-    argparser.add_argument('--early_stop', type=int, help='stop the training after this number of evaluations without accuracy increase', default=12)
-    argparser.add_argument('--verbose', type=int, help='print additional information', default=0)
-    argparser.add_argument('--seed', type=int, help='seed for reproducible results', default=42)
-    args = argparser.parse_args()
-
-    main()
+        if patience == 0: break
+        
+    return best_val_loss

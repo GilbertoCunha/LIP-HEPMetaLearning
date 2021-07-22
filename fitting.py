@@ -1,11 +1,6 @@
-from torch.utils.data import DataLoader
-from dataprocessing import generate_tasks
-from meta import Meta
-from tqdm import tqdm
+from tqdm.notebook import tqdm
 import numpy as np
 import scipy.stats
-import argparse
-import torch
 import wandb
 
 
@@ -67,36 +62,6 @@ def get_model(hidden_layers):
         ('sigmoid', [])
     ]
     return config
-
-
-def objective(trial, train_tasks, val_tasks, args):
-    # Manually seed torch and numpy for reproducible results
-    torch.manual_seed(args["seed"])
-    torch.cuda.manual_seed_all(args["seed"])
-    np.random.seed(args["seed"])
-    
-    # Defining trial parameters
-    num_layers = trial.suggest_int("num_hidden_layers", 1, 4)
-    hidden_layers = []
-    for i in range(num_layers):
-        num_features = trial.suggest_int(f"num_features_layer_{i}", 20, 150)
-        hidden_layers.append(num_features)
-
-    # Choose PyTorch device and create the model
-    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-    model = Meta(args, get_model(hidden_layers), device).to(device)
-    
-    # Setup Weights and Biases logger, config hyperparams and watch model
-    wandb.init(project="Meta-HEP")
-    k_sup, k_que = args["k_sup"], args["k_que"]
-    name = f"K{k_sup}Q{k_que}"
-    wandb.run.name = name
-    wandb.config.update(args)
-    wandb.watch(model)
-    print(f"RUN NAME: {name}")
-
-    # Fit the model and return best loss
-    return fit(model, train_tasks, val_tasks, args)
 
 
 def fit(model, train_tasks, val_tasks, args):

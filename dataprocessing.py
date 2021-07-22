@@ -1,5 +1,5 @@
 from torch.utils.data import Dataset, DataLoader
-from tqdm import tqdm
+from tqdm.notebook import tqdm
 import pandas as pd
 import torch
 
@@ -65,7 +65,7 @@ def generate_tasks(signal_files, bkg_file, sup_shots, que_shots):
     tasks = {}
     
     # Create the different tasks in the dictionary
-    for file in tqdm(signal_files, total=len(signal_files), desc="Populating tasks"):
+    for file in tqdm(signal_files, total=len(signal_files), desc="Populating tasks", leave=False):
         # Get filename of the corresponding file
         filename = file.split("/")[-1].split(".")[0]
 

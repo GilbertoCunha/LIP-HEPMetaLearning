@@ -1,5 +1,5 @@
 from torch.utils.data import Dataset, DataLoader
-from tqdm.notebook import tqdm
+from tqdm import tqdm
 import pandas as pd
 import torch
 

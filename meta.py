@@ -1,3 +1,4 @@
+from sklearn.metrics import roc_auc_score
 from torch.nn import functional as F
 from learner import Learner
 from copy import deepcopy
@@ -6,37 +7,42 @@ from torch import nn
 import numpy as np
 import torch
 
+def to_numpy(tensor):
+    return tensor.cpu().detach().numpy()
+
 def get_class_weights(weights, labels):
     weights = [weights[int(y.item())] for y in labels]
     weights = torch.tensor(weights).float()
     return weights
+
 class Meta(nn.Module):
     """
     Meta Learner
     """
-    def __init__(self, args, config, device):
+    def __init__(self, name, args, config, device):
         """
 
         :param args:
         """
         super(Meta, self).__init__()
         self.device = device
-        self.meta_lr = args["meta_lr"]
-        self.k_sup = args["k_sup"]
-        self.k_que = args["k_que"]
+        self.name = name
+        self.meta_lr = args.meta_lr
+        self.k_sup = args.k_sup
+        self.k_que = args.k_que
 
         self.net = Learner(config)
 
         # Create learnable per parameter learning rate
-        self.type = args["lr_type"]
+        self.type = args.lr_type
         if self.type == "vector":
             self.update_lr = nn.ParameterList()
             for p in self.net.parameters():
-                p_lr = args["update_lr"] * torch.ones_like(p)
+                p_lr = args.inner_lr * torch.ones_like(p)
                 self.update_lr.append(nn.Parameter(p_lr))
             params = list(self.net.parameters()) + list(self.update_lr)
         elif self.type == "scalar":
-            self.update_lr = nn.Parameter(torch.tensor(args["update_lr"]))
+            self.update_lr = nn.Parameter(torch.tensor(args.inner_lr))
             params = list(self.net.parameters())
             params += [self.update_lr]
 
@@ -83,6 +89,7 @@ class Meta(nn.Module):
         # List of losses and correct guesses for each fast weight update step
         losses_q = [0, 0]
         corrects = [0, 0]
+        roc = 0
 
         # Iterate tasks
         for task in tasks:
@@ -118,6 +125,7 @@ class Meta(nn.Module):
                 correct = (torch.eq(pred_q, y_que) * w_que).sum().item()
                 corrects[0] = corrects[0] + correct
 
+
             # Get fast weights with inner optimizer
             grad = torch.autograd.grad(loss, self.net.parameters())
             fast_weights = self.get_fast_weights(grad)
@@ -134,9 +142,11 @@ class Meta(nn.Module):
                 pred_q = torch.round(y_pred)
                 correct = (torch.eq(pred_q, y_que) * w_que).sum().item()
                 corrects[1] = corrects[1] + correct
+                roc += roc_auc_score(to_numpy(y_que), to_numpy(pred_q), sample_weight=to_numpy(w_que))
 
         # Get the mean of the losses across tasks
         loss_q = losses_q[-1] / len(tasks)
+        roc = roc / len(tasks)
 
         # Optimize model parameters according to query loss
         self.meta_optim.zero_grad()
@@ -147,7 +157,7 @@ class Meta(nn.Module):
         k_que = x_que.shape[0]
         accs = np.array(corrects) / (k_que * len(tasks))
 
-        return loss_q.item(), accs[-1]
+        return loss_q.item(), accs[-1], roc
 
     def finetunning(self, task):
         # Get torch device and initialize accuracy placeholder
@@ -202,6 +212,7 @@ class Meta(nn.Module):
             pred_q = torch.round(y_hat_q)
             correct = (torch.eq(pred_q, y_que) * w_que).sum().item()
             corrects[1] = corrects[1] + correct
+            roc = roc_auc_score(to_numpy(y_que), to_numpy(pred_q), sample_weight=to_numpy(w_que)) 
 
         del net
 
@@ -209,7 +220,7 @@ class Meta(nn.Module):
         query_size = x_que.shape[0]
         accs = np.array(corrects) / query_size
 
-        return loss_q.item(), accs[-1]
+        return loss_q.item(), accs[-1], roc
 
 
 def main():

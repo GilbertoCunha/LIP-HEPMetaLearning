@@ -7,6 +7,7 @@ import scipy.stats
 import argparse
 import wandb
 import torch
+import os
 
 def get_layer(in_features, out_features):
     return [
@@ -162,7 +163,6 @@ def objective(trial, train_signals, val_signals, bkg_file, args):
     if args.log:
         wandb.init(name=name, project="Meta-HEP", config=args)
         wandb.watch(model)
-        print(f"RUN NAME: {name}")
 
     # Fit the model and return best loss
     return fit(model, train_tasks, val_tasks, args)
@@ -179,7 +179,7 @@ if __name__ == "__main__":
     parser.add_argument("--inner_lr", type=float, help="interior starting learning rate", default=1e-2)
     parser.add_argument("--lr_type", type=str, help="type of interior learning rate: \"scalar\", \"vector\" or \"matrix\"", default="vector")
     parser.add_argument("--seed", type=int, help="seed for reproducible results", default=42)
-    parser.add_argument("--log", type=int, help="flag for enabling or disabling wandb logging", default=0)
+    parser.add_argument("--log", type=int, help="flag for enabling or disabling wandb logging", default=1)
     args = parser.parse_args()
     
     # Datapath and background file for data-files
@@ -195,6 +195,9 @@ if __name__ == "__main__":
     train_signals = [datapath + p + ".h5" for p in train_signals]
     val_signals = [datapath + p + ".h5" for p in val_signals]
     test_signals = [datapath + p + ".h5" for p in test_signals]
+
+    # Make weights and biases silent
+    if args.log: os.environ["WANDB_SILENT"] = "true" 
     
     # Define and deploy optuna study
     study_name = "Fixed K-support and K-query optimization"

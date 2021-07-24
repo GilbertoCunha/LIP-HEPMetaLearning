@@ -9,14 +9,12 @@ import wandb
 import torch
 import os
 
-
 def get_layer(in_features, out_features):
     return [
         ('bn', [in_features]),
         ('linear', [out_features, in_features]),
         ('leakyrelu', [1e-2, False])
     ]
-
 
 def get_model(hidden_layers):
     # Initialize model
@@ -35,6 +33,14 @@ def get_model(hidden_layers):
         ('sigmoid', [])
     ]
     return config
+
+def get_model_name(k_sup, k_que, hidden_layers):
+    num_layers = len(hidden_layers)
+    name = f"K{k_sup}Q{k_que}-HL{num_layers}-"
+    for i in range(num_layers):
+        features = hidden_layers[i]
+        name += f"F{features}"
+    return name
 
 
 def evaluate(model, tasks, eval_steps, desc="Eval Test"):
@@ -152,8 +158,6 @@ def objective(trial, train_signals, val_signals, bkg_file, args):
     np.random.seed(args.seed)
 
     # Defining trial parameters
-    sup_shots = trial.suggest_int("k_sup", 100, 100)
-    que_shots = trial.suggest_int("k_que", 200, 200)
     num_layers = trial.suggest_int("num_hidden_layers", 1, 4)
     hidden_layers = []
     for i in range(num_layers):
@@ -161,21 +165,18 @@ def objective(trial, train_signals, val_signals, bkg_file, args):
         hidden_layers.append(num_features)
 
     # Generate tasks from the signal
-    args.k_sup, args.k_que = sup_shots, que_shots
-    train_tasks = generate_tasks(train_signals, bkg_file, sup_shots, que_shots)
-    val_tasks = generate_tasks(val_signals, bkg_file, sup_shots, que_shots)
+    train_tasks = generate_tasks(train_signals, bkg_file, args.k_sup, args.k_que)
+    val_tasks = generate_tasks(val_signals, bkg_file, args.k_sup, args.k_que)
 
     # Define model name
-    name = f"K{sup_shots}Q{que_shots}-HL{num_layers}-"
-    for i in range(num_layers):
-        features = hidden_layers[i]
-        name += f"F{features}"
+    name = get_model_name(args.k_sup, args.k_que, hidden_layers)
+    trial.name = name
 
     # Choose PyTorch device and create the model
-    device = torch.device(
-        'cuda') if torch.cuda.is_available() else torch.device('cpu')
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     model = Meta(name, args.meta_lr, args.k_sup, args.k_que, args.lr_type, 
                  args.inner_lr, get_model(hidden_layers), device).to(device)
+    trial.model = model
 
     # Setup Weights and Biases logger, config hyperparams and watch model
     if args.log:
@@ -189,28 +190,19 @@ def objective(trial, train_signals, val_signals, bkg_file, args):
 if __name__ == "__main__":
     # Define parser parameters
     parser = argparse.ArgumentParser()
-    parser.add_argument("--num_trials", type=int,
-                        help="number of configurations to try before stopping optuna search", default=30)
-    parser.add_argument("--epochs", type=int,
-                        help="maximum number of epochs", default=1000)
-    parser.add_argument("--epoch_steps", type=int,
-                        help="number of steps per epoch", default=200)
-    parser.add_argument("--val_steps", type=int,
-                        help="number of steps per validation", default=100)
-    parser.add_argument("--patience", type=int,
-                        help="number of steps the model has to improve before stopping", default=10)
-    parser.add_argument("--meta_lr", type=float,
-                        help="exterior starting learning rate", default=1e-3)
-    parser.add_argument("--inner_lr", type=float,
-                        help="interior starting learning rate", default=1e-2)
-    parser.add_argument("--lr_type", type=str,
-                        help="type of interior learning rate: \"scalar\", \"vector\" or \"matrix\"", default="vector")
-    parser.add_argument("--seed", type=int,
-                        help="seed for reproducible results", default=42)
-    parser.add_argument(
-        "--log", type=int, help="flag for enabling or disabling wandb logging", default=1)
-    parser.add_argument("--save_models", type=int,
-                        help="flag for saving best models", default=0)
+    parser.add_argument("--num_trials", type=int, help="number of configurations to try before stopping optuna search", default=30)
+    parser.add_argument("--k_sup", type=int, help="number of data samples per support batch", default=100)
+    parser.add_argument("--k_que", type=int, help="number of data samples per query batch", default=200)
+    parser.add_argument("--epochs", type=int, help="maximum number of epochs", default=1000)
+    parser.add_argument("--epoch_steps", type=int, help="number of steps per epoch", default=200)
+    parser.add_argument("--val_steps", type=int, help="number of steps per validation", default=100)
+    parser.add_argument("--patience", type=int, help="number of steps the model has to improve before stopping", default=10)
+    parser.add_argument("--meta_lr", type=float, help="exterior starting learning rate", default=1e-3)
+    parser.add_argument("--inner_lr", type=float, help="interior starting learning rate", default=1e-2)
+    parser.add_argument("--lr_type", type=str, help="type of interior learning rate: \"scalar\", \"vector\" or \"matrix\"", default="vector")
+    parser.add_argument("--seed", type=int, help="seed for reproducible results", default=42)
+    parser.add_argument("--log", type=int, help="flag for enabling or disabling wandb logging", default=1)
+    parser.add_argument("--save_models", type=int, help="flag for saving best models", default=0)
     args = parser.parse_args()
 
     # Datapath and background file for data-files
@@ -228,14 +220,15 @@ if __name__ == "__main__":
     test_signals = [datapath + p + ".h5" for p in test_signals]
 
     # Make weights and biases silent
-    if args.log:
-        os.environ["WANDB_SILENT"] = "true"
+    if args.log: os.environ["WANDB_SILENT"] = "true"
 
-    # Define and deploy optuna study
+    # Define and perform optuna study
     study_name = "Fixed K-support and K-query optimization"
-    study = opt.create_study(
-        study_name=study_name, storage='sqlite:///meta-model.db', load_if_exists=True, direction="minimize")
-
-    def optimize(trial): return objective(
-        trial, train_signals, val_signals, bkg_file, args)
+    study = opt.create_study(study_name=study_name, storage='sqlite:///meta-model.db', load_if_exists=True, direction="minimize")
+    optimize = lambda trial: objective(trial, train_signals, val_signals, bkg_file, args)
     study.optimize(optimize, n_trials=args.num_trials)
+
+    # Save model with the best trial
+    # name = study.best_trial.name
+    # model = study.best_trial.model
+    # model.save_params("models/" + name + ".pt")

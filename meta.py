@@ -175,6 +175,7 @@ class Meta(nn.Module):
         # Get torch device and initialize accuracy placeholder
         device = self.device
         corrects = [0, 0]
+        roc = 0
 
         # Get class weights for support and query data
         sup_cweights = task["sup"]["weights"]
@@ -228,7 +229,7 @@ class Meta(nn.Module):
             correct = (torch.eq(pred_q, y_que) * w_que).sum().item()
             corrects[1] = corrects[1] + correct
             try:
-                roc = roc_auc_score(to_numpy(y_que), to_numpy(pred_q), sample_weight=to_numpy(w_que))
+                roc += roc_auc_score(to_numpy(y_que), to_numpy(pred_q), sample_weight=to_numpy(w_que))
             except:
                 pass
 

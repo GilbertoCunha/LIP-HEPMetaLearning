@@ -151,7 +151,10 @@ class Meta(nn.Module):
                 pred_q = torch.round(y_pred)
                 correct = (torch.eq(pred_q, y_que) * w_que).sum().item()
                 corrects[1] = corrects[1] + correct
-                roc += roc_auc_score(to_numpy(y_que), to_numpy(pred_q), sample_weight=to_numpy(w_que))
+                try:
+                    roc += roc_auc_score(to_numpy(y_que), to_numpy(pred_q), sample_weight=to_numpy(w_que))
+                except:
+                    pass
 
         # Get the mean of the losses across tasks
         loss_q = losses_q[-1] / len(tasks)
@@ -224,8 +227,10 @@ class Meta(nn.Module):
             pred_q = torch.round(y_hat_q)
             correct = (torch.eq(pred_q, y_que) * w_que).sum().item()
             corrects[1] = corrects[1] + correct
-            roc = roc_auc_score(to_numpy(y_que), to_numpy(
-                pred_q), sample_weight=to_numpy(w_que))
+            try:
+                roc = roc_auc_score(to_numpy(y_que), to_numpy(pred_q), sample_weight=to_numpy(w_que))
+            except:
+                pass
 
         del net
 

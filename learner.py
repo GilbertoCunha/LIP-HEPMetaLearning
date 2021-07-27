@@ -18,6 +18,7 @@ class Learner(nn.Module):
         super(Learner, self).__init__()
 
         self.config = config
+        self.training = True
 
         # this dict contains all tensors needed to be optimized
         self.vars = nn.ParameterList()
@@ -67,7 +68,7 @@ class Learner(nn.Module):
                 self.vars_bn.extend([running_mean, running_var])
 
             elif name in ['tanh', 'relu', 'upsample', 'avg_pool2d', 'max_pool2d',
-                          'flatten', 'reshape', 'leakyrelu', 'sigmoid']:
+                          'flatten', 'reshape', 'leakyrelu', 'sigmoid', 'dropout']:
                 continue
             else:
                 raise NotImplementedError
@@ -102,7 +103,7 @@ class Learner(nn.Module):
                 tmp = 'max_pool2d:(k:%d, stride:%d, padding:%d)' % (
                     param[0], param[1], param[2])
                 info += tmp + '\n'
-            elif name in ['flatten', 'tanh', 'relu', 'upsample', 'reshape', 'sigmoid', 'use_logits', 'bn']:
+            elif name in ['flatten', 'tanh', 'relu', 'upsample', 'reshape', 'sigmoid', 'use_logits', 'bn', 'dropout']:
                 tmp = name + ':' + str(tuple(param))
                 info += tmp + '\n'
             else:
@@ -175,7 +176,8 @@ class Learner(nn.Module):
                 x = F.max_pool2d(x, param[0], param[1], param[2])
             elif name == 'avg_pool2d':
                 x = F.avg_pool2d(x, param[0], param[1], param[2])
-
+            elif name == 'dropout':
+                x = F.dropout(x, param[0], bn_training)
             else:
                 raise NotImplementedError
 

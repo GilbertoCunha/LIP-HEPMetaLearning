@@ -8,13 +8,14 @@ import wandb
 import torch
 import os
 
-def get_layer(in_features, out_features):
+def get_layer(in_features, out_features, dropout):
     """ Returns a linear layer of the model with 
     batch normalization and activation included.
 
     Args:
         in_features (int): Number of input features
         out_features (int): Number of output features
+        dropout (float): Dropout value for the layer
 
     Returns:
         Configuration of the layer
@@ -22,14 +23,16 @@ def get_layer(in_features, out_features):
     return [
         ('bn', [in_features]),
         ('linear', [out_features, in_features]),
+        ('dropout', [dropout]),
         ('leakyrelu', [1e-2, False])
     ]
 
-def get_model(hidden_layers):
+def get_model(hidden_layers, dropout):
     """ Generates the configuration of a model.
 
     Args:
         hidden_layers ([int]): Number of features per hidden layer
+        dropout (float): Dropout value for the model
 
     Returns:
         Configuration to build the model
@@ -41,7 +44,7 @@ def get_model(hidden_layers):
 
     # Populate model according to hidden layers
     for out_features in hidden_layers:
-        config += get_layer(in_features, out_features)
+        config += get_layer(in_features, out_features, dropout)
         in_features = out_features
 
     # Add final layer to the model
@@ -52,32 +55,33 @@ def get_model(hidden_layers):
     ]
     return config
 
-def get_model_name(k_sup, k_que, hidden_layers):
+def get_model_name(k_sup, k_que, dropout, hidden_layers):
     """ Computes model name from main parameters
 
     Args:
         k_sup (int): Number of support samples per batch
         k_que (int): Number of query samples per batch
+        dropout (float): Dropout value for the model
         hidden_layers ([int]): Number of features per hidden layer
 
     Returns:
         str: The name of the model
     """
     num_layers = len(hidden_layers)
-    name = f"K{k_sup}Q{k_que}-HL{num_layers}-"
+    name = f"K{k_sup}Q{k_que}-HL{num_layers}-D{dropout:.2f}"
     for i in range(num_layers):
         features = hidden_layers[i]
         name += f"F{features}"
     return name
 
 
-def evaluate(model, tasks, eval_steps, desc="Eval Test"):
+def evaluate(model, tasks, val_samples, desc="Eval Test"):
     """ Evaluates a meta-model on a set of tasks.
 
     Args:
         model (PyTorch model): The PyTorch model to evaluate on.
         tasks (dict): The dictionary of tasks to use.
-        eval_steps (int): Number of batches to use to perform evaluation per task.
+        val_samples (int): Number of samples to use to perform evaluation per task.
         desc (str, optional): Description for tqdm bar. Defaults to "Eval Test".
 
     Returns:
@@ -88,7 +92,8 @@ def evaluate(model, tasks, eval_steps, desc="Eval Test"):
     eval_bar = tqdm(tasks, desc=desc, total=len(tasks), leave=False)
     for task in eval_bar:
         # Create task bar and metric placeholders
-        steps_bar = tqdm(range(eval_steps), desc=f"Evaluating task {task}", total=eval_steps, leave=False)
+        val_steps = val_samples // model.k_sup
+        steps_bar = tqdm(range(val_steps), desc=f"Evaluating task {task}", total=val_steps, leave=False)
         task_accs, task_losses, task_rocs = [], [], []
 
         # Finetune the model and get loss and accuracy
@@ -102,6 +107,8 @@ def evaluate(model, tasks, eval_steps, desc="Eval Test"):
         loss = sum(task_losses) / len(task_losses)
         acc = sum(task_accs) / len(task_accs)
         roc = sum(task_rocs) / len(task_rocs)
+        
+        # Append avg metrics to lists
         accs.append(acc)
         losses.append(loss)
         rocs.append(roc)
@@ -128,16 +135,17 @@ def fit(model, train_tasks, val_tasks, args):
     Returns:
         float: The best validation loss achieved during the training process
     """
+    global current_best_model
 
     # Start the training
     metrics = {}
     best_val_loss = float("inf")
     patience = args.patience
-    epoch_bar = tqdm(range(
-        args.epochs), desc=f"Training {model.name}", total=args.epochs, leave=False)
+    epoch_bar = tqdm(range(args.epochs), desc=f"Training {model.name}", total=args.epochs, leave=False)
     for epoch in epoch_bar:
         # Create steps bar
-        steps_bar = tqdm(range(args.epoch_steps), desc=f"Epoch {epoch}", total=args.epoch_steps, leave=False)
+        steps = args.epoch_samples // args.k_sup
+        steps_bar = tqdm(range(steps), desc=f"Epoch {epoch}", total=steps, leave=False)
 
         # Perform training for each task
         tr_accs, tr_losses, tr_rocs = [], [], []
@@ -153,15 +161,15 @@ def fit(model, train_tasks, val_tasks, args):
         tr_roc = np.array(tr_rocs).astype(np.float32).mean(axis=0)
 
         # Get validation metrics
-        val_acc, val_loss, val_roc = evaluate(
-            model, val_tasks, args.val_steps, "Eval Val")
+        val_acc, val_loss, val_roc = evaluate(model, val_tasks, args.val_samples, "Eval Val")
 
         # Update best metrics
         if val_loss < best_val_loss:
             # Update best validation loss
             best_val_loss = val_loss
             patience = args.patience
-
+            current_best_model = model
+            
             # Save best model weights
             if args.save_models:
                 model.save_params("models/" + model.name + ".pt")
@@ -189,7 +197,7 @@ def fit(model, train_tasks, val_tasks, args):
 
 
 def objective(trial, train_signals, val_signals, bkg_file, args):
-    global best_model
+    global best_model, current_best_model
     
     # Manually seed torch and numpy for reproducible results
     torch.manual_seed(args.seed)
@@ -198,6 +206,7 @@ def objective(trial, train_signals, val_signals, bkg_file, args):
 
     # Defining trial parameters
     num_layers = trial.suggest_int("num_hidden_layers", 1, 4)
+    dropout = trial.suggest_float("dropout", 0.05, 0.2)
     hidden_layers = []
     for i in range(num_layers):
         num_features = trial.suggest_int(f"num_features_layer_{i}", 20, 150)
@@ -208,8 +217,8 @@ def objective(trial, train_signals, val_signals, bkg_file, args):
     val_tasks = generate_tasks(val_signals, bkg_file, args.k_sup, args.k_que)
 
     # Define model parameters
-    name = get_model_name(args.k_sup, args.k_que, hidden_layers)
-    config = get_model(hidden_layers)
+    name = get_model_name(args.k_sup, args.k_que, dropout, hidden_layers)
+    config = get_model(hidden_layers, dropout)
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
     # Create PyTorch model
@@ -226,7 +235,7 @@ def objective(trial, train_signals, val_signals, bkg_file, args):
     # Change best model if loss is better
     if loss < best_model["loss"]:
         best_model["loss"] = loss
-        best_model["model"] = model
+        best_model["model"] = current_best_model
     
     return loss
 
@@ -238,8 +247,8 @@ if __name__ == "__main__":
     parser.add_argument("--k_sup", type=int, help="number of data samples per support batch", default=100)
     parser.add_argument("--k_que", type=int, help="number of data samples per query batch", default=200)
     parser.add_argument("--epochs", type=int, help="maximum number of epochs", default=1000)
-    parser.add_argument("--epoch_steps", type=int, help="number of steps per epoch", default=100)
-    parser.add_argument("--val_steps", type=int, help="number of steps per validation", default=250)
+    parser.add_argument("--epoch_samples", type=int, help="number of training samples per epoch", default=10000)
+    parser.add_argument("--val_samples", type=int, help="number of samples per validation", default=25000)
     parser.add_argument("--patience", type=int, help="number of steps the model has to improve before stopping", default=10)
     parser.add_argument("--meta_lr", type=float, help="exterior starting learning rate", default=1e-3)
     parser.add_argument("--inner_lr", type=float, help="interior starting learning rate", default=1e-2)
@@ -268,6 +277,7 @@ if __name__ == "__main__":
     
     # Variable to hold best model
     best_model = {"loss": float("inf"), "model": None}
+    current_best_model = None
 
     # Define and perform optuna study
     study_name = f"K{args.k_sup}Q{args.k_que} optimization"

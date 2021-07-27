@@ -3,13 +3,22 @@ from meta import Meta
 from tqdm import tqdm
 import optuna as opt
 import numpy as np
-import scipy.stats
 import argparse
 import wandb
 import torch
 import os
 
 def get_layer(in_features, out_features):
+    """ Returns a linear layer of the model with 
+    batch normalization and activation included.
+
+    Args:
+        in_features (int): Number of input features
+        out_features (int): Number of output features
+
+    Returns:
+        Configuration of the layer
+    """
     return [
         ('bn', [in_features]),
         ('linear', [out_features, in_features]),
@@ -17,6 +26,15 @@ def get_layer(in_features, out_features):
     ]
 
 def get_model(hidden_layers):
+    """ Generates the configuration of a model.
+
+    Args:
+        hidden_layers ([int]): Number of features per hidden layer
+
+    Returns:
+        Configuration to build the model
+    """
+    
     # Initialize model
     config = []
     in_features = 69
@@ -35,6 +53,16 @@ def get_model(hidden_layers):
     return config
 
 def get_model_name(k_sup, k_que, hidden_layers):
+    """ Computes model name from main parameters
+
+    Args:
+        k_sup (int): Number of support samples per batch
+        k_que (int): Number of query samples per batch
+        hidden_layers ([int]): Number of features per hidden layer
+
+    Returns:
+        str: The name of the model
+    """
     num_layers = len(hidden_layers)
     name = f"K{k_sup}Q{k_que}-HL{num_layers}-"
     for i in range(num_layers):
@@ -44,18 +72,28 @@ def get_model_name(k_sup, k_que, hidden_layers):
 
 
 def evaluate(model, tasks, eval_steps, desc="Eval Test"):
+    """ Evaluates a meta-model on a set of tasks.
+
+    Args:
+        model (PyTorch model): The PyTorch model to evaluate on.
+        tasks (dict): The dictionary of tasks to use.
+        eval_steps (int): Number of batches to use to perform evaluation per task.
+        desc (str, optional): Description for tqdm bar. Defaults to "Eval Test".
+
+    Returns:
+        (float, float, float): accuracy, loss and roc of the model
+    """
     accs, losses, rocs = [], [], []
 
     eval_bar = tqdm(tasks, desc=desc, total=len(tasks), leave=False)
     for task in eval_bar:
         # Create task bar and metric placeholders
-        steps_bar = tqdm(
-            range(eval_steps), desc=f"Evaluating task {task}", total=eval_steps, leave=False)
+        steps_bar = tqdm(range(eval_steps), desc=f"Evaluating task {task}", total=eval_steps, leave=False)
         task_accs, task_losses, task_rocs = [], [], []
 
         # Finetune the model and get loss and accuracy
         for _ in steps_bar:
-            loss, acc, roc = model.finetunning(tasks[task])
+            loss, acc, roc = model.evaluate(tasks[task])
             task_accs.append(acc)
             task_losses.append(loss)
             task_rocs.append(roc)
@@ -99,8 +137,7 @@ def fit(model, train_tasks, val_tasks, args):
         args.epochs), desc=f"Training {model.name}", total=args.epochs, leave=False)
     for epoch in epoch_bar:
         # Create steps bar
-        steps_bar = tqdm(range(args.epoch_steps),
-                         desc=f"Epoch {epoch}", total=args.epoch_steps, leave=False)
+        steps_bar = tqdm(range(args.epoch_steps), desc=f"Epoch {epoch}", total=args.epoch_steps, leave=False)
 
         # Perform training for each task
         tr_accs, tr_losses, tr_rocs = [], [], []
@@ -152,6 +189,8 @@ def fit(model, train_tasks, val_tasks, args):
 
 
 def objective(trial, train_signals, val_signals, bkg_file, args):
+    global best_model
+    
     # Manually seed torch and numpy for reproducible results
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
@@ -168,15 +207,13 @@ def objective(trial, train_signals, val_signals, bkg_file, args):
     train_tasks = generate_tasks(train_signals, bkg_file, args.k_sup, args.k_que)
     val_tasks = generate_tasks(val_signals, bkg_file, args.k_sup, args.k_que)
 
-    # Define model name
+    # Define model parameters
     name = get_model_name(args.k_sup, args.k_que, hidden_layers)
-    trial.name = name
-
-    # Choose PyTorch device and create the model
+    config = get_model(hidden_layers)
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-    model = Meta(name, args.meta_lr, args.k_sup, args.k_que, args.lr_type, 
-                 args.inner_lr, get_model(hidden_layers), device).to(device)
-    trial.model = model
+
+    # Create PyTorch model
+    model = Meta(name, config, args.k_sup, args.k_que, device, args.meta_lr, args.lr_type, args.inner_lr).to(device)
 
     # Setup Weights and Biases logger, config hyperparams and watch model
     if args.log:
@@ -184,18 +221,25 @@ def objective(trial, train_signals, val_signals, bkg_file, args):
         wandb.watch(model)
 
     # Fit the model and return best loss
-    return fit(model, train_tasks, val_tasks, args)
+    loss = fit(model, train_tasks, val_tasks, args)
+    
+    # Change best model if loss is better
+    if loss < best_model["loss"]:
+        best_model["loss"] = loss
+        best_model["model"] = model
+    
+    return loss
 
 
 if __name__ == "__main__":
     # Define parser parameters
     parser = argparse.ArgumentParser()
-    parser.add_argument("--num_trials", type=int, help="number of configurations to try before stopping optuna search", default=30)
+    parser.add_argument("--num_trials", type=int, help="number of configurations to try before stopping optuna search", default=50)
     parser.add_argument("--k_sup", type=int, help="number of data samples per support batch", default=100)
     parser.add_argument("--k_que", type=int, help="number of data samples per query batch", default=200)
     parser.add_argument("--epochs", type=int, help="maximum number of epochs", default=1000)
-    parser.add_argument("--epoch_steps", type=int, help="number of steps per epoch", default=200)
-    parser.add_argument("--val_steps", type=int, help="number of steps per validation", default=100)
+    parser.add_argument("--epoch_steps", type=int, help="number of steps per epoch", default=100)
+    parser.add_argument("--val_steps", type=int, help="number of steps per validation", default=250)
     parser.add_argument("--patience", type=int, help="number of steps the model has to improve before stopping", default=10)
     parser.add_argument("--meta_lr", type=float, help="exterior starting learning rate", default=1e-3)
     parser.add_argument("--inner_lr", type=float, help="interior starting learning rate", default=1e-2)
@@ -221,14 +265,16 @@ if __name__ == "__main__":
 
     # Make weights and biases silent
     if args.log: os.environ["WANDB_SILENT"] = "true"
+    
+    # Variable to hold best model
+    best_model = {"loss": float("inf"), "model": None}
 
     # Define and perform optuna study
-    study_name = "Fixed K-support and K-query optimization"
+    study_name = f"K{args.k_sup}Q{args.k_que} optimization"
     study = opt.create_study(study_name=study_name, storage='sqlite:///meta-model.db', load_if_exists=True, direction="minimize")
     optimize = lambda trial: objective(trial, train_signals, val_signals, bkg_file, args)
     study.optimize(optimize, n_trials=args.num_trials)
 
     # Save model with the best trial
-    # name = study.best_trial.name
-    # model = study.best_trial.model
-    # model.save_params("models/" + name + ".pt")
+    filename = "models/" + best_model["model"].name + ".pt"
+    best_model["model"].save(filename)

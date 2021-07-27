@@ -23,7 +23,7 @@ class Meta(nn.Module):
     Meta Learner
     """
 
-    def __init__(self, name, meta_lr, k_sup, k_que, lr_type, inner_lr, config, device):
+    def __init__(self, name, config, k_sup, k_que, device, meta_lr=1e-3, lr_type="vector", inner_lr=1e-2):
         """
 
         :param args:
@@ -151,8 +151,7 @@ class Meta(nn.Module):
                 pred_q = torch.round(y_pred)
                 correct = (torch.eq(pred_q, y_que) * w_que).sum().item()
                 corrects[1] = corrects[1] + correct
-                roc += roc_auc_score(to_numpy(y_que),
-                                     to_numpy(pred_q), sample_weight=to_numpy(w_que))
+                roc += roc_auc_score(to_numpy(y_que), to_numpy(pred_q), sample_weight=to_numpy(w_que))
 
         # Get the mean of the losses across tasks
         loss_q = losses_q[-1] / len(tasks)
@@ -169,7 +168,7 @@ class Meta(nn.Module):
 
         return loss_q.item(), accs[-1], roc
 
-    def finetunning(self, task):
+    def evaluate(self, task):
         # Get torch device and initialize accuracy placeholder
         device = self.device
         corrects = [0, 0]
@@ -236,7 +235,7 @@ class Meta(nn.Module):
 
         return loss_q.item(), accs[-1], roc
 
-    def save_params(self, file):
+    def save(self, file):
         params = {
             "vars": self.net.vars,
             "vars_bn": self.net.vars_bn,
@@ -244,7 +243,7 @@ class Meta(nn.Module):
         }
         torch.save(params, file)
 
-    def load_params(self, file):
+    def load(self, file):
         params = torch.load(file)
         self.net.vars = params["vars"]
         self.net.vars_bn = params["vars_bn"]

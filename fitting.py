@@ -248,7 +248,7 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, help="maximum number of epochs", default=1000)
     parser.add_argument("--epoch_samples", type=int, help="number of training samples per epoch", default=1000)
     parser.add_argument("--val_samples", type=int, help="number of samples per validation", default=2500)
-    parser.add_argument("--patience", type=int, help="number of steps the model has to improve before stopping", default=5)
+    parser.add_argument("--patience", type=int, help="number of steps the model has to improve before stopping", default=8)
     parser.add_argument("--meta_lr", type=float, help="exterior starting learning rate", default=1e-3)
     parser.add_argument("--inner_lr", type=float, help="interior starting learning rate", default=1e-2)
     parser.add_argument("--lr_type", type=str, help="type of interior learning rate: \"scalar\", \"vector\" or \"matrix\"", default="vector")

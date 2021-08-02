@@ -3,7 +3,7 @@ from os import system
 
 # List of studies to perform
 num_trials = 30
-k_sup = [5, 10, 20, 35, 50, 75, 100]
+k_sup = [5, 10, 25, 50, 100, 250, 500]
 k_que = [2*k for k in k_sup]
 
 # Iterate and perform studies

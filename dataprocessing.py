@@ -34,7 +34,7 @@ class MetaHEPDataset(Dataset):
         self.class_weights = torch.tensor([1, bkg_wsum / signal_wsum]).float()
 
         # Drop gen columns of dataframe
-        drop_cols = [col for col in self.df if "gen" in col] + ["level_0", "index"]
+        drop_cols = [col for col in self.df if "gen" in col] + ["level_0", "index", "weights"]
         self.df = self.df.drop(columns=drop_cols)
         
     def __len__(self):

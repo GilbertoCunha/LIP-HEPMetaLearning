@@ -239,7 +239,7 @@ def objective(trial, train_tasks, val_tasks, args):
         best_model["roc"] = roc
         best_model["model"] = current_best_model
     
-    return loss
+    return roc
 
 
 if __name__ == "__main__":
@@ -249,8 +249,8 @@ if __name__ == "__main__":
     parser.add_argument("--k_sup", type=int, help="number of data samples per support batch", default=100)
     parser.add_argument("--k_que", type=int, help="number of data samples per query batch", default=200)
     parser.add_argument("--epochs", type=int, help="maximum number of epochs", default=1000)
-    parser.add_argument("--epoch_samples", type=int, help="number of training samples per epoch", default=1000)
-    parser.add_argument("--val_samples", type=int, help="number of samples per validation", default=2500)
+    parser.add_argument("--epoch_samples", type=int, help="number of training samples per epoch", default=5000)
+    parser.add_argument("--val_samples", type=int, help="number of samples per validation", default=2000)
     parser.add_argument("--patience", type=int, help="number of steps the model has to improve before stopping", default=8)
     parser.add_argument("--meta_lr", type=float, help="exterior starting learning rate", default=1e-3)
     parser.add_argument("--inner_lr", type=float, help="interior starting learning rate", default=1e-2)

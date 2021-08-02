@@ -167,6 +167,7 @@ def fit(model, train_tasks, val_tasks, args):
         # Update best metrics
         if val_loss < best_val_loss:
             # Update patience 
+            best_val_loss = val_loss
             patience = args.patience
             
             # Save best model weights
@@ -175,7 +176,7 @@ def fit(model, train_tasks, val_tasks, args):
         else:
             patience -= 1
         if val_roc > best_val_roc:
-            best_val_roc = roc
+            best_val_roc = val_roc
             current_best_model = model
 
         # Update Task tqdm bar

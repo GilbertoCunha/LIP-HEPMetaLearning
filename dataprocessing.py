@@ -21,25 +21,27 @@ class MetaHEPDataset(Dataset):
         self.df = df[mask].reset_index(drop=True)
         
         # Store weights
-        self.weights = self.df["gen_xsec"] / self.df.shape[0]
-        
+        self.df["weights"] = self.df["gen_xsec"] / self.df.shape[0]
+        self.weights = self.df["weights"]
+
         # Store labels
         self.df["gen_label"] = self.df["gen_label"].replace({"bkg": 0.0, "signal": 1.0})
         self.labels = self.df["gen_label"]
         
+        # Calculate class weights
+        bkg_wsum = self.df[self.df["gen_label"] == 0]["weights"].sum()
+        signal_wsum = self.df[self.df["gen_label"] == 1]["weights"].sum()
+        self.class_weights = torch.tensor([1, bkg_wsum / signal_wsum]).float()
+
         # Drop gen columns of dataframe
         drop_cols = [col for col in self.df if "gen" in col] + ["level_0", "index"]
         self.df = self.df.drop(columns=drop_cols)
         
-    def get_class_weights(self):
-        signal_events = self.labels[self.labels == 1].shape[0]
-        bkg_events = self.labels[self.labels == 0].shape[0]
-        signal_weight = bkg_events / signal_events
-        class_weights = torch.tensor([1, signal_weight]).float()
-        return class_weights
-        
     def __len__(self):
         return self.df.shape[0]
+
+    def get_class_weights(self):
+        return self.class_weights
     
     def __getitem__(self, idx):
         features = torch.tensor(self.df.loc[idx, :].values).float()

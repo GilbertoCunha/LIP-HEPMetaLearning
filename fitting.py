@@ -139,7 +139,7 @@ def fit(model, train_tasks, val_tasks, args):
 
     # Start the training
     metrics = {}
-    best_val_loss = float("inf")
+    best_val_roc = float("inf")
     patience = args.patience
     epoch_bar = tqdm(range(args.epochs), desc=f"Training {model.name}", total=args.epochs, leave=False)
     for epoch in epoch_bar:
@@ -165,16 +165,17 @@ def fit(model, train_tasks, val_tasks, args):
 
         # Update best metrics
         if val_loss < best_val_loss:
-            # Update best validation loss
-            best_val_loss = val_loss
+            # Update patience 
             patience = args.patience
-            current_best_model = model
             
             # Save best model weights
             if args.save_models:
                 model.save_params("models/" + model.name + ".pt")
         else:
             patience -= 1
+        if val_roc > best_val_roc:
+            best_val_roc = roc
+            current_best_model = model
 
         # Update Task tqdm bar
         metrics['tr_acc'] = tr_acc
@@ -193,7 +194,7 @@ def fit(model, train_tasks, val_tasks, args):
         if patience == 0:
             break
 
-    return best_val_loss
+    return best_val_roc
 
 
 def objective(trial, train_tasks, val_tasks, args):
@@ -229,11 +230,11 @@ def objective(trial, train_tasks, val_tasks, args):
         wandb.watch(model)
 
     # Fit the model and return best loss
-    loss = fit(model, train_tasks, val_tasks, args)
+    roc = fit(model, train_tasks, val_tasks, args)
     
     # Change best model if loss is better
-    if loss < best_model["loss"]:
-        best_model["loss"] = loss
+    if roc < best_model["roc"]:
+        best_model["roc"] = roc
         best_model["model"] = current_best_model
     
     return loss
@@ -278,7 +279,7 @@ if __name__ == "__main__":
     if args.log: os.environ["WANDB_SILENT"] = "true"
     
     # Variable to hold best model
-    best_model = {"loss": float("inf"), "model": None}
+    best_model = {"roc": 0, "model": None}
     current_best_model = None
 
     # Define and perform optuna study

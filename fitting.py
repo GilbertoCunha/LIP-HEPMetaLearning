@@ -139,7 +139,8 @@ def fit(model, train_tasks, val_tasks, args):
 
     # Start the training
     metrics = {}
-    best_val_roc = float("inf")
+    best_val_roc = 0
+    best_val_loss = float("inf")
     patience = args.patience
     epoch_bar = tqdm(range(args.epochs), desc=f"Training {model.name}", total=args.epochs, leave=False)
     for epoch in epoch_bar:

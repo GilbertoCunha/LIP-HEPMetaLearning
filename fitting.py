@@ -234,8 +234,8 @@ def objective(trial, train_tasks, val_tasks, args):
     # Fit the model and return best loss
     roc = fit(model, train_tasks, val_tasks, args)
     
-    # Change best model if loss is better
-    if roc < best_model["roc"]:
+    # Change best model if roc is better
+    if roc > best_model["roc"]:
         best_model["roc"] = roc
         best_model["model"] = current_best_model
     
@@ -286,7 +286,7 @@ if __name__ == "__main__":
 
     # Define and perform optuna study
     study_name = f"K{args.k_sup}Q{args.k_que} optimization"
-    study = opt.create_study(study_name=study_name, storage='sqlite:///meta-model.db', load_if_exists=True, direction="minimize")
+    study = opt.create_study(study_name=study_name, storage='sqlite:///meta-model.db', load_if_exists=True, direction="maximize")
     optimize = lambda trial: objective(trial, train_tasks, val_tasks, args)
     study.optimize(optimize, n_trials=args.num_trials)
 

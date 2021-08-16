@@ -106,10 +106,8 @@ class Meta(nn.Module):
             # Get the support and query data for this task and normalize weights
             x_sup, w_sup, y_sup = next(tasks[task]["sup"]["data"])
             x_que, w_que, y_que = next(tasks[task]["que"]["data"])
-            x_sup, w_sup, y_sup = x_sup.to(
-                device), w_sup.to(device), y_sup.to(device)
-            x_que, w_que, y_que = x_que.to(
-                device), w_que.to(device), y_que.to(device)
+            x_sup, w_sup, y_sup = x_sup.to(device), w_sup.to(device), y_sup.to(device)
+            x_que, w_que, y_que = x_que.to(device), w_que.to(device), y_que.to(device)
             w_sup = w_sup / w_sup.sum() * w_sup.shape[0]
             w_que = w_que / w_que.sum() * w_que.shape[0]
 
@@ -122,11 +120,9 @@ class Meta(nn.Module):
             # Get query loss and accuracy before fast weights
             with torch.no_grad():
                 # Loss
-                y_pred = self.net(
-                    x_que, self.net.parameters(), bn_training=True)
+                y_pred = self.net(x_que, self.net.parameters(), bn_training=True)
                 weights = get_class_weights(que_cweights, y_que).to(device)
-                loss_q = F.binary_cross_entropy(
-                    y_pred, y_que, reduction="none")
+                loss_q = F.binary_cross_entropy(y_pred, y_que, reduction="none")
                 loss_q = (loss_q * w_que * weights).mean()
                 losses_q[0] += loss_q
 
@@ -184,10 +180,8 @@ class Meta(nn.Module):
         # Get the support and query data for this task and normalize weights
         x_sup, w_sup, y_sup = next(task["sup"]["data"])
         x_que, w_que, y_que = next(task["que"]["data"])
-        x_sup, w_sup, y_sup = x_sup.to(
-            device), w_sup.to(device), y_sup.to(device)
-        x_que, w_que, y_que = x_que.to(
-            device), w_que.to(device), y_que.to(device)
+        x_sup, w_sup, y_sup = x_sup.to(device), w_sup.to(device), y_sup.to(device)
+        x_que, w_que, y_que = x_que.to(device), w_que.to(device), y_que.to(device)
         w_sup = w_sup / w_sup.sum() * w_sup.shape[0]
         w_que = w_que / w_que.sum() * w_que.shape[0]
 
@@ -240,6 +234,28 @@ class Meta(nn.Module):
         accs = np.array(corrects) / query_size
 
         return loss_q.item(), accs[-1], roc
+    
+    def predict(self, x_sup, w_sup, y_sup, x_que, class_weights):
+        # Get torch device
+        device = self.device
+        
+        # Send tensors to device
+        x_sup, w_sup, y_sup = x_sup.to(device), w_sup.to(device), y_sup.to(device)
+        x_que, class_weights = x_que.to(device), class_weights.to(device)
+
+        # Get loss
+        y_pred = self.net(x_sup, vars=None, bn_training=False)
+        loss = F.binary_cross_entropy(y_pred, y_sup, reduction="none")
+        loss = (loss * w_sup * class_weights).mean()
+
+        # Get fast weights with inner optimizer
+        grad = torch.autograd.grad(loss, self.net.parameters())
+        fast_weights = self.get_fast_weights(grad)
+
+        # Predict with fast weights and get query loss
+        y_pred = self.net(x_que, fast_weights, bn_training=False)
+
+        return y_pred.detach().cpu()
 
     def save(self, file):
         params = {

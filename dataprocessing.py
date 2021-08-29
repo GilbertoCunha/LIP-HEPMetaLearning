@@ -81,7 +81,9 @@ def generate_tasks(signal_files, bkg_file, sup_shots, que_shots):
         tasks[filename] = {"sup": {}, "que": {}}
         tasks[filename]["sup"]["data"] = iter(cycle(sup_loader))
         tasks[filename]["sup"]["weights"] = sup_set.get_class_weights()
+        tasks[filename]["sup"]["columns"] = list(sup_set.df)
         tasks[filename]["que"]["data"] = iter(cycle(que_loader))
         tasks[filename]["que"]["weights"] = que_set.get_class_weights()
+        tasks[filename]["que"]["columns"] = list(que_set.df)
         
     return tasks

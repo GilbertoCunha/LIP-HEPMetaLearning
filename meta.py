@@ -266,7 +266,7 @@ class Meta(nn.Module):
         torch.save(params, file)
 
     def load(self, file):
-        params = torch.load(file)
+        params = torch.load(file, map_location=self.device)
         self.net.vars = params["vars"]
         self.net.vars_bn = params["vars_bn"]
         self.update_lr = params["inner_lr"]
